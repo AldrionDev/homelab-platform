@@ -93,6 +93,20 @@ All issues use this standardized structure:
   * README or runbook is updated when the issue changes how the platform is installed, operated, verified, or recovered.
   * Review passes before merge.
 
+## Automated issue workflow
+
+A global Claude Code skill, `/issue-orchestrator <issue-number> [--repo owner/repo]`, is available (defined outside this repo, at `~/.claude/skills/issue-orchestrator/`) to drive one GitHub issue through its full lifecycle end to end: read the issue → draft a plan → **explicit approval gate** → implement in an isolated git worktree → code review → security review (fix-loop back to implementation, max 3 rounds) → documentation update → Definition of Done report → **explicit approval gate** for commit + push + PR.
+
+It relies directly on this repo's standardized issue template and Definition of Done checklist above — do not change that template without checking whether the orchestrator's Definition of Done reporting logic needs to follow.
+
+Four dedicated subagents back it: `issue-implementer`, `issue-reviewer`, `issue-security-reviewer`, `issue-documenter` (also defined globally, not in this repo). Key behaviors relevant to this repo specifically:
+
+* The implementer uses TDD (red-green-refactor) when an issue's acceptance criteria/verification steps describe testable behavior, and skips it explicitly (stating why) when they don't — several issues here (e.g. host-level scripts with only manual verification steps) legitimately fall into the second case.
+* Before executing any host-mutating command (systemd, dnsmasq, package installs, etc. — directly relevant given this repo's Safety rules above), the implementer always stops and asks for separate, explicit approval, independent of the plan-approval and push/PR gates.
+* This workflow does not change or relax the Safety rules or Workflow rules above — it automates following them, it does not substitute for them.
+
+Invoke it manually when you want the full lifecycle automated for a specific issue; it is not auto-triggered by conversation.
+
 ## Git / commit conventions
 
 * Branch naming derived from the issue, e.g.:
