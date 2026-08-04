@@ -1,75 +1,73 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code in this repo.
 
-## Project purpose
+## Project
 
-`homelab-platform` is a reusable, project-independent local home lab platform repository. It owns the platform layer (cluster, registry, DNS, namespace scaffolding, backups) used to run home lab workloads such as HomeStreamLab and future projects. It does not contain any application-specific deployment code.
+`homelab-platform` is a reusable local home lab platform repo for HomeStreamLab and future projects.
 
-## Current status
+Current status: **bootstrapping**. Do not claim any platform component works until implemented and verified here.
 
-Bootstrapping. Only the initial repository scaffold exists (`README.md`, git history). No platform code, scripts, or Terraform configuration has been implemented yet. Do not assume any component below is working until it has actually been implemented and verified in this repo.
+Current milestone: **Home Lab Platform Bootstrap**.
 
-## Current milestone
+## Scope
 
-**Home Lab Platform Bootstrap**
+Planned platform pieces:
 
-Goal: create a reusable, replayable, single-node k3s home lab platform on the local machine.
+- single-node bare-metal k3s
+- local Docker registry
+- k3s registry trust
+- dnsmasq `*.homelab.local`
+- Terraform-managed namespaces and ResourceQuotas
+- HCP Terraform remote state with Local execution mode
+- `homestreamlab` namespace placeholder only
+- generic local backup routine
+- platform runbook
 
-## Planned architecture
+This repo is **platform-only**.
 
-Everything in this section is **planned, not implemented**, unless a corresponding issue has been completed and verified in the repo history.
+Do not add:
 
-* k3s bare-metal single-node cluster
-* Local Docker registry running on the host
-* k3s registry trust configuration for the local registry
-* dnsmasq wildcard DNS for `*.homelab.local`
-* Terraform-managed in-cluster scaffolding
-* HCP Terraform remote state with Local execution mode
-* Reusable namespace + ResourceQuota pattern
-* `homestreamlab` namespace placeholder with a ResourceQuota (namespace scaffolding only, no app deployment)
-* Generic local backup routine for future stateful workloads
-* Platform runbook documenting setup and recovery steps
+- HomeStreamLab app deployment
+- HomeStreamLab Dockerfiles
+- HomeStreamLab Jenkinsfile
+- HomeStreamLab app Terraform workspace
+- app Secrets, IngressRoute, database deployment, or app manifests
 
-## Repository boundaries
+HomeStreamLab-specific deployment belongs in the separate `homestreamlab` repo.
 
-This repository is **platform-only**. It must never contain:
+Out of scope now: AWS/EKS/ECS, TLS/mkcert, Vault/sealed-secrets, ArgoCD/Flux, Prometheus/Grafana, multi-node/KVM workers, production hardening beyond local-lab safety notes.
 
-* HomeStreamLab application deployment code
-* HomeStreamLab Dockerfiles
-* HomeStreamLab Jenkinsfile
-* HomeStreamLab app Terraform workspace
-* App Secrets, IngressRoute, database deployment, or other application manifests
+## Safety
 
-HomeStreamLab-specific deployment belongs in the separate `homestreamlab` repository.
+- Never modify host-level services without explicit user approval.
+- Host-level includes k3s, dnsmasq, registry, systemd, Terraform backend/state, backup/restore.
+- Host-level scripts need safety checks and rollback notes.
+- Never commit secrets, kubeconfigs, Terraform state, `.env`, backup archives, or machine-specific values.
+- `.env.example` may contain placeholders only.
 
-## Out of scope (current milestone)
+## Workflow
 
-* AWS/EKS/ECS or any cloud infrastructure
-* TLS/mkcert
-* Vault/sealed-secrets
-* ArgoCD/Flux
-* Prometheus/Grafana
-* Multi-node or KVM worker nodes
-* HomeStreamLab app deployment
-* Production-grade hardening beyond basic local-lab safety notes
+- Work one GitHub issue at a time.
+- Plan first; implement only after approval.
+- Keep changes scoped to the approved issue.
+- Prefer simple scripts/docs over abstractions.
+- Mark planned items as planned, never as done.
+- Commit/push/PR only after review PASS and explicit user approval.
 
-## Safety rules
+Global issue workflow is available:
 
-* Never modify host-level services (k3s, dnsmasq, Docker registry, etc.) without explicit user confirmation first.
-* Any host-level script must include safety and rollback instructions.
-* Never commit secrets, kubeconfigs, Terraform state, `.env` files, backup archives, or machine-specific values.
+```txt
+/issue-orchestrator <issue-number> [--repo owner/repo]
+```
 
-## Workflow rules
+It handles plan → approval → implementation → review/security review → fix loop → DoD report → approval for commit/push/PR.
 
-* Work issue by issue; keep changes small and scoped to one issue.
-* Plan first, implement after the plan is accepted.
-* Prefer small, practical steps over speculative architecture — do not build beyond the approved milestone scope.
-* Mark planned-but-unimplemented items clearly as planned in docs/comments, never as done.
+Repo safety rules still apply. Host-mutating commands require separate approval.
 
-## GitHub issue template
+## Issue standard
 
-All issues use this standardized structure:
+Use:
 
 ```md
 ## Goal
@@ -83,42 +81,24 @@ All issues use this standardized structure:
 ## Definition of Done
 ```
 
-* `Verification steps` means Testing / Validation — the concrete steps used to confirm the acceptance criteria hold.
-* `Definition of Done` is required on every issue and always includes at least:
-  * Acceptance criteria are met.
-  * Verification steps pass.
-  * Changes are scoped to this issue only.
-  * No secrets, kubeconfigs, Terraform state, `.env` files, backup archives, or machine-specific values are committed.
-  * Safety and rollback notes are documented when host-level behavior is changed.
-  * README or runbook is updated when the issue changes how the platform is installed, operated, verified, or recovered.
-  * Review passes before merge.
+Default DoD:
 
-## Automated issue workflow
+- Acceptance criteria met.
+- Verification steps pass.
+- Scope respected.
+- No secrets or machine-specific values committed.
+- Safety/rollback notes documented for host-level changes.
+- README/runbook updated when install, operation, verification, or recovery changes.
+- Review passes before merge.
 
-A global Claude Code skill, `/issue-orchestrator <issue-number> [--repo owner/repo]`, is available (defined outside this repo, at `~/.claude/skills/issue-orchestrator/`) to drive one GitHub issue through its full lifecycle end to end: read the issue → draft a plan → **explicit approval gate** → implement in an isolated git worktree → code review → security review (fix-loop back to implementation, max 3 rounds) → documentation update → Definition of Done report → **explicit approval gate** for commit + push + PR.
+## Git
 
-It relies directly on this repo's standardized issue template and Definition of Done checklist above — do not change that template without checking whether the orchestrator's Definition of Done reporting logic needs to follow.
+- One branch per issue.
+- Use issue-based branch names, e.g. `chore/init-repo-structure`.
+- Use Conventional Commits.
+- No unrelated changes.
+- No direct merge to `main`.
 
-Four dedicated subagents back it: `issue-implementer`, `issue-reviewer`, `issue-security-reviewer`, `issue-documenter` (also defined globally, not in this repo). Key behaviors relevant to this repo specifically:
+## Update rule
 
-* The implementer uses TDD (red-green-refactor) when an issue's acceptance criteria/verification steps describe testable behavior, and skips it explicitly (stating why) when they don't — several issues here (e.g. host-level scripts with only manual verification steps) legitimately fall into the second case.
-* Before executing any host-mutating command (systemd, dnsmasq, package installs, etc. — directly relevant given this repo's Safety rules above), the implementer always stops and asks for separate, explicit approval, independent of the plan-approval and push/PR gates.
-* This workflow does not change or relax the Safety rules or Workflow rules above — it automates following them, it does not substitute for them.
-
-Invoke it manually when you want the full lifecycle automated for a specific issue; it is not auto-triggered by conversation.
-
-## Git / commit conventions
-
-* Branch naming derived from the issue, e.g.:
-  * `chore/init-repo-structure`
-  * `feature/k3s-install-script`
-* Conventional Commit style (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`).
-* Small, meaningful commits; no unrelated changes bundled together.
-
-## Notes for future updates
-
-Update this file as the platform is actually implemented:
-
-* Move completed items from "Planned architecture" into a new "Implemented architecture" section, with real file paths and commands (build/lint/test/deploy) once they exist.
-* Keep "Out of scope" accurate — only remove an item once a milestone explicitly brings it into scope.
-* Do not describe any component as working until it has been implemented and verified in this repo.
+When a planned component becomes implemented and verified, update this file with real paths/commands.
