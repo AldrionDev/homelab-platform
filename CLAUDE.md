@@ -12,9 +12,14 @@ Current milestone: **Home Lab Platform Bootstrap**.
 
 ## Scope
 
+Implemented and verified:
+
+- single-node bare-metal k3s — `k3s/install.sh`, requires `K3S_VERSION`
+  (exact `vX.Y.Z+k3sN` tag) and `HOST_LAN_IP`; tests `k3s/install.test.sh`;
+  runbook `docs/k3s-runbook.md`
+
 Planned platform pieces:
 
-- single-node bare-metal k3s
 - local Docker registry
 - k3s registry trust
 - dnsmasq `*.homelab.local`
