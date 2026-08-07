@@ -25,12 +25,30 @@ Implemented and verified:
   LAN-only bind, `/v2/` readiness, runtime restart policy, push, pull by
   immutable digest, manifest DELETE returning `202`, and the final `404`.
   The Docker daemon `insecure-registries` step is manual and documented in the
-  runbook, not scripted. k3s/containerd registry trust is **not** part of this
-  — it stays a separate, still-planned piece.
+  runbook, not scripted.
+- k3s registry trust — `/etc/rancher/k3s/registries.yaml` with a `mirrors`
+  entry whose endpoint uses the `http://` scheme (no `configs`, no TLS section,
+  no `insecure_skip_verify`), `root:root 0600`. Creating it and restarting k3s
+  is a **manual, fail-closed runbook transaction**, not a script — it never
+  overwrites a configuration it did not write. Verification is
+  `k3s/registry-pull-test.sh`, run once on each side of a k3s restart, each run
+  with its own marker/tag/manifest; it requires an explicit `KUBECONFIG` and
+  refuses any cluster whose node InternalIP is not this host's default-route
+  source IPv4 (`ip -4 route get`), so `HOST_LAN_IP` is never the node-identity
+  oracle and shared bridge addresses cannot fake locality. Unit tests:
+  `k3s/registry-pull-test.test.sh`. Runbook: `docs/k3s-runbook.md`.
+  Host-verified: the `absent` branch of the setup transaction, the setup
+  restart and post-restart health, Run A, a separate verification restart, the
+  post-restart persistence checks, and Run B with a fresh image identity.
+  **Not runtime-exercised**: every rollback and failure path, the manual-merge
+  branch, and the `identical`/`differs` config states. Run B evidence is
+  cache-immune, not cache-free, and the local-node identity check was added
+  after Runs A and B (and later replaced by the route-derived predicate), so it
+  was not in force during them. See the runbook's Verification status section
+  before claiming more than this.
 
 Planned platform pieces:
 
-- k3s registry trust
 - dnsmasq `*.homelab.local`
 - Terraform-managed namespaces and ResourceQuotas
 - HCP Terraform remote state with Local execution mode
