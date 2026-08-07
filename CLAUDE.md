@@ -17,10 +17,19 @@ Implemented and verified:
 - single-node bare-metal k3s — `k3s/install.sh`, requires `K3S_VERSION`
   (exact `vX.Y.Z+k3sN` tag) and `HOST_LAN_IP`; tests `k3s/install.test.sh`;
   runbook `docs/k3s-runbook.md`
+- local Docker registry — `registry/docker-compose.yml` (`registry:2.8.3`,
+  `restart: unless-stopped`, requires `HOST_LAN_IP` and binds to that address
+  only, delete API enabled, no auth/TLS, named volume
+  `homelab-registry-data`); smoke test `registry/smoke-test.sh`; runbook
+  `docs/registry-runbook.md`. Verified on a real host: Compose startup,
+  LAN-only bind, `/v2/` readiness, runtime restart policy, push, pull by
+  immutable digest, manifest DELETE returning `202`, and the final `404`.
+  The Docker daemon `insecure-registries` step is manual and documented in the
+  runbook, not scripted. k3s/containerd registry trust is **not** part of this
+  — it stays a separate, still-planned piece.
 
 Planned platform pieces:
 
-- local Docker registry
 - k3s registry trust
 - dnsmasq `*.homelab.local`
 - Terraform-managed namespaces and ResourceQuotas

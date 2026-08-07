@@ -1,0 +1,36 @@
+# Local Docker registry for the home lab.
+#
+# Unauthenticated and plain HTTP by design: this is a trusted, single-user
+# LAN-only service. It must never be exposed to the public internet.
+# See docs/registry-runbook.md.
+#
+# Run from the repository root:
+#   docker compose -f registry/docker-compose.yml --env-file .env up -d
+
+name: homelab-registry
+
+services:
+  registry:
+    # Pinned to an exact patch release, not the floating `2` tag, so the
+    # running version never changes without a deliberate commit.
+    image: registry:2.8.3
+    container_name: homelab-registry
+    restart: unless-stopped
+    ports:
+      # Bound to the host's LAN address only. Docker publishes ports ahead of
+      # the usual host firewall rules, so a 0.0.0.0 bind would expose an
+      # unauthenticated registry on every interface, including VPN and
+      # hotspot ones.
+      - "${HOST_LAN_IP:?HOST_LAN_IP is required (see .env.example)}:5000:5000"
+    environment:
+      # Required for manifest DELETE. This is not a retention or garbage
+      # collection policy: deleting a manifest drops the reference, it does
+      # not by itself reclaim disk space.
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - registry-data:/var/lib/registry
+
+volumes:
+  registry-data:
+    # Fixed name so the future backup routine has a stable target.
+    name: homelab-registry-data
