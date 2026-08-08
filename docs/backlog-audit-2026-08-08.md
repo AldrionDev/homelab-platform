@@ -5,7 +5,7 @@ records findings and proposed corrections; no issue listed below was created,
 edited, closed, relabeled, or reordered while producing it.
 
 **Audited against**: `CONTEXT.md` and `docs/adr/0001`–`0004` as of commit
-`503c8708e6ab32130316fd8988bad769d10e7126` on branch
+`4862a5d3cb34e8bbb6d362da951cdabd4a89d7db` on branch
 `chore/16-platform-spec-backlog-audit`.
 
 **Audited issues**: #5, #6, #7, #8, #9, #10 (all `OPEN`, milestone "Home Lab Platform
