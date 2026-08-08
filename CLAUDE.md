@@ -87,14 +87,6 @@ Out of scope now: AWS/EKS/ECS, TLS/mkcert, Vault/sealed-secrets, ArgoCD/Flux, Pr
 - Mark planned items as planned, never as done.
 - Commit/push/PR only after review PASS and explicit user approval.
 
-Global issue workflow is available:
-
-```txt
-/issue-orchestrator <issue-number> [--repo owner/repo]
-```
-
-It handles plan → approval → implementation → review/security review → fix loop → DoD report → approval for commit/push/PR.
-
 Repo safety rules still apply. Host-mutating commands require separate approval.
 
 ## Issue standard
@@ -134,3 +126,13 @@ Default DoD:
 ## Update rule
 
 When a planned component becomes implemented and verified, update this file with real paths/commands.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues, using the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context layout (`CONTEXT.md` + `docs/adr/` at the repo root). See `docs/agents/domain.md`.
