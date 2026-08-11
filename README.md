@@ -10,9 +10,12 @@ deployed onto this platform from their own separate repositories.
 
 ## Status
 
-**Bootstrapping.** Single-node k3s, the local Docker registry and k3s registry
-trust are implemented and verified on a real host. Every other platform
-component is still planned.
+**Bootstrapping.** Single-node k3s, the local Docker registry, k3s registry trust,
+and dnsmasq wildcard DNS are implemented and verified on a real host. dnsmasq's
+LAN-device resolution from a second physical device is not yet exercised, since it
+needs a separate `ufw` change — see
+[`docs/dnsmasq-runbook.md`](./docs/dnsmasq-runbook.md#verification-status).
+Every other platform component is still planned.
 
 See [`CLAUDE.md`](./CLAUDE.md) for the current milestone, scope, and planned
 platform pieces.
@@ -114,6 +117,56 @@ local area network only**. It **must not be exposed to the public internet**.
 Any production or cloud use would require **authentication and TLS** first;
 neither is configured here.
 
+## DNS (dnsmasq)
+
+Wildcard DNS for the home lab: `*.HOMELAB_DOMAIN` resolves to `HOST_LAN_IP` via a
+dedicated `/etc/dnsmasq.d/homelab.conf`, never merged into the system's own dnsmasq
+configuration. Set `HOST_LAN_IP` and `HOMELAB_DOMAIN` in `.env` first (copy
+[`.env.example`](./.env.example)), then run from the repository root:
+
+```sh
+sudo HOST_LAN_IP=<your-lan-ip> HOMELAB_DOMAIN=<your-domain> bash dnsmasq/install.sh
+```
+
+Operate the service:
+
+```sh
+systemctl status dnsmasq
+systemctl restart dnsmasq
+journalctl -u dnsmasq
+```
+
+Verify:
+
+```sh
+sudo HOST_LAN_IP=<your-lan-ip> HOMELAB_DOMAIN=<your-domain> bash dnsmasq/smoke-test.sh
+```
+
+To point another device on the LAN at this resolver, set its DNS server to
+`HOST_LAN_IP`. This host's firewall (`ufw`) currently has no rule admitting port 53,
+so a separate, explicitly-approved firewall change is needed first for LAN devices
+(not for host-local verification, which is unaffected) — see
+[`docs/dnsmasq-runbook.md`](./docs/dnsmasq-runbook.md#lan-device-verification-and-ufw).
+
+Rolling back fully restores the previous DNS behavior — stops and disables dnsmasq,
+then removes only the files this platform proves it owns:
+
+```sh
+sudo bash dnsmasq/rollback.sh
+```
+
+`.local` domains are deliberately avoided (ADR-0005): RFC 6762 reserves `.local` for
+mDNS, which makes it unreliable for this exact use case, so this platform's canonical
+domain is `homelab.home.arpa` per RFC 8375 instead.
+
+**Status: verified on a real host** — install, wildcard resolution, public DNS
+forwarding, dnsmasq active/enabled state, rollback, normal host DNS after rollback,
+and reinstall with a final smoke test all passed. **Not exercised: LAN-device
+resolution** from a second physical device, since it needs a separate, explicitly
+approved `ufw` change this component's installer never performs automatically. See
+[`docs/dnsmasq-runbook.md`](./docs/dnsmasq-runbook.md#verification-status) for the
+exact boundary.
+
 ## Layout
 
 - `docs/` — platform documentation and runbooks
@@ -121,8 +174,12 @@ neither is configured here.
     verification, and the destructive reset procedure
   - [`docs/registry-runbook.md`](./docs/registry-runbook.md) — registry
     operations, Docker daemon trust, reset, and rollback
+  - [`docs/dnsmasq-runbook.md`](./docs/dnsmasq-runbook.md) — dnsmasq install,
+    operations, verification, and rollback
+  - `docs/adr/` — architecture decision records
 - `k3s/` — k3s install script and the local-registry pull test
-- `dnsmasq/` — local DNS configuration
+- `dnsmasq/` — wildcard DNS: `install.sh`, `rollback.sh`, `smoke-test.sh`, `lib.sh`,
+  and their tests
 - `registry/` — local Docker registry: `docker-compose.yml` and `smoke-test.sh`
 - `terraform/platform/` — Terraform-managed namespaces and resource quotas
 - `backup/` — local backup routine
