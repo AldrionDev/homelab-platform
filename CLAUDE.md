@@ -46,10 +46,39 @@ Implemented and verified:
   after Runs A and B (and later replaced by the route-derived predicate), so it
   was not in force during them. See the runbook's Verification status section
   before claiming more than this.
+- dnsmasq wildcard DNS for `*.HOMELAB_DOMAIN` — `dnsmasq/install.sh`
+  (idempotent, transactional, fail-closed `noop`/`mismatch`/`install`,
+  requires `HOST_LAN_IP` and `HOMELAB_DOMAIN` with no defaults),
+  `dnsmasq/rollback.sh` (ownership-aware, byte-exact `cmp` against durable
+  state, never a comment marker), `dnsmasq/smoke-test.sh`. Config is isolated
+  to `/etc/dnsmasq.d/homelab.conf`, loaded via a systemd drop-in that
+  explicitly passes both `--conf-file=/etc/dnsmasq.conf
+  --conf-file=/etc/dnsmasq.d/homelab.conf` — `/etc/dnsmasq.conf` itself is
+  never edited. Durable ownership state lives under
+  `/var/lib/homelab-platform/dnsmasq/` (root:root 0700), beneath the shared
+  `/var/lib/homelab-platform/` root (root:root 0755, created explicitly if
+  absent, never removed by rollback or by install's own failure cleanup).
+  Tests: `dnsmasq/lib.test.sh`, `dnsmasq/install.test.sh`,
+  `dnsmasq/rollback.test.sh`. Runbook: `docs/dnsmasq-runbook.md`.
+  Host-verified with `HOST_LAN_IP=192.168.1.197` and
+  `HOMELAB_DOMAIN=homelab.home.arpa`: install (including the
+  `/var/lib/homelab-platform` state-root creation fix found by this same
+  verification run), dnsmasq active and enabled, wildcard
+  `*.homelab.home.arpa` resolution to `HOST_LAN_IP`, normal public DNS
+  forwarding through dnsmasq, the host's own normal resolver path unaffected,
+  full rollback (service stopped and disabled, both managed files and the
+  component state directory removed, `DropInPaths` empty, a direct query to
+  `HOST_LAN_IP:53` refused, normal DNS still working, the shared
+  `/var/lib/homelab-platform/` root correctly left in place), and a clean
+  reinstall afterward with a second passing smoke test. **Not exercised**:
+  LAN-device resolution from a second physical device — this host's `ufw`
+  default-denies inbound traffic and admits no port 53 rule; issue #5 marks
+  that check as "if convenient," no `ufw` mutation was performed, and none is
+  automated by this component. See the runbook's Verification status section
+  before claiming more than this.
 
 Planned platform pieces:
 
-- dnsmasq `*.homelab.home.arpa`
 - Terraform-managed namespaces and ResourceQuotas
 - HCP Terraform remote state with Local execution mode
 - `homestreamlab` namespace placeholder only
