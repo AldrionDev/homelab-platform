@@ -49,7 +49,7 @@ Implemented and verified:
 
 Planned platform pieces:
 
-- dnsmasq `*.homelab.local`
+- dnsmasq `*.homelab.home.arpa`
 - Terraform-managed namespaces and ResourceQuotas
 - HCP Terraform remote state with Local execution mode
 - `homestreamlab` namespace placeholder only
