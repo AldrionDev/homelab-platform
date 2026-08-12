@@ -65,7 +65,7 @@ render_homelab_conf() {
 # /etc/resolv.conf) — no no-resolv/server= exclusivity is set here.
 address=/${domain}/${ip}
 listen-address=${ip}
-bind-interfaces
+bind-dynamic
 EOF
 }
 
