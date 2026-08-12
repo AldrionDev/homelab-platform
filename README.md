@@ -19,17 +19,19 @@ needs a separate `ufw` change — see
 The Platform Terraform Workspace — HCP Terraform remote state in **Local**
 execution mode, with the `kubernetes` and `helm` providers configured against
 this host's k3s cluster — is **implemented and verified**: the HCP workspace
-exists in Local execution mode, `terraform init` initializes successfully
-against it, and `terraform plan` reports no changes against the empty baseline.
-This bootstrap deploys no Kubernetes resources itself. The reusable Namespace
-Pattern — a child module producing a `Namespace` and matching `ResourceQuota`
-for any Project — is implemented under
+exists in Local execution mode, and `terraform init` initializes successfully
+against it. The reusable Namespace Pattern — a child module producing a
+`Namespace` and matching `ResourceQuota` for any Project — is implemented
+under
 [`terraform/modules/namespace-resourcequota/`](./terraform/modules/namespace-resourcequota/)
 and repo-locally verified (`validate.sh` + `plan-check.sh`; see
 [`docs/terraform-runbook.md#namespace-pattern-module`](./docs/terraform-runbook.md#namespace-pattern-module)).
-It instantiates no real project — that, and the first real cluster-connected
-`apply`, is issue #8. See
-[`docs/terraform-runbook.md`](./docs/terraform-runbook.md#verification-status).
+This root module now instantiates that pattern once, for HomeStreamLab: a
+`homestreamlab` Namespace and ResourceQuota, created by a real `terraform
+apply` against this host's cluster and verified live — see
+[`docs/terraform-runbook.md`](./docs/terraform-runbook.md#homestreamlab-namespace-instantiation-issue-8).
+This repository manages only that Namespace and ResourceQuota — no
+HomeStreamLab application resource exists here or is deployed by this repo.
 
 Every other platform component is still planned.
 
@@ -190,9 +192,12 @@ The Platform's own Terraform root module lives in
 **Local** execution mode (ADR-0001), and the `kubernetes` and `helm` providers
 pointed at this host's k3s cluster.
 
-It deliberately declares **no Kubernetes resources** — the namespace and
-ResourceQuota pattern is a separate, still-planned piece of work. Running it
-therefore deploys nothing to the cluster.
+It instantiates the reusable Namespace Pattern module
+([`terraform/modules/namespace-resourcequota/`](./terraform/modules/namespace-resourcequota/))
+once, in `terraform/platform/main.tf`, reserving the `homestreamlab`
+Namespace and a matching ResourceQuota. No other Kubernetes resource is
+declared here — no Deployment, Service, Ingress/IngressRoute, Secret, or Helm
+release belongs in this repository.
 
 Repo-local checks (never contacts HCP Terraform, never touches the cluster):
 
@@ -207,7 +212,10 @@ a user-readable kubeconfig copy is configured:
 cd terraform/platform
 export TF_CLOUD_ORGANIZATION=<your-hcp-organization>
 terraform init
-terraform plan     # expected: no changes
+terraform plan
+# expected: no changes, now that the homestreamlab Namespace/ResourceQuota
+# already exist — see docs/terraform-runbook.md for the first plan/apply that
+# created them
 ```
 
 The workspace name is fixed in `versions.tf` (ADR-0002); only the
@@ -222,12 +230,12 @@ procedure, verification and rollback are all in
 
 **Status: implemented and verified.** The `homelab-platform` HCP workspace
 exists in Local execution mode; `terraform init`, `terraform validate` and
-`terraform plan` all succeed against it, with `plan` reporting no changes
-against the empty baseline. This does **not** demonstrate live
-provider-to-cluster connectivity — the configuration declares no resources or
-data sources that would require one — see the runbook's
-[Verification status](./docs/terraform-runbook.md#verification-status) for the
-exact boundary of what was and was not exercised.
+`terraform plan` all succeed against it. The workspace now manages real
+cluster resources — the `homestreamlab` Namespace and ResourceQuota, created
+by a real, reviewed `terraform apply` and verified live with `kubectl` — see
+the runbook's
+[`homestreamlab` namespace instantiation](./docs/terraform-runbook.md#homestreamlab-namespace-instantiation-issue-8)
+section for the exact evidence.
 
 ## Layout
 
@@ -245,8 +253,8 @@ exact boundary of what was and was not exercised.
 - `dnsmasq/` — wildcard DNS: `install.sh`, `rollback.sh`, `smoke-test.sh`, `lib.sh`,
   and their tests
 - `registry/` — local Docker registry: `docker-compose.yml` and `smoke-test.sh`
-- `terraform/platform/` — the Platform's HCP-backed Terraform root module; no
-  concrete project is instantiated here (that's issue #8)
+- `terraform/platform/` — the Platform's HCP-backed Terraform root module;
+  instantiates the Namespace Pattern module once, for `homestreamlab`
 - `terraform/modules/namespace-resourcequota/` — the reusable Namespace
   Pattern child module (`Namespace` + matching `ResourceQuota`), with its own
   repo-local throwaway-plan verification (`plan-check.sh`)

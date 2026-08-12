@@ -12,9 +12,11 @@ ResourceQuota bounding that Project's CPU/memory consumption. This module is the
 reusable definition of that pattern; a Project is onboarded by calling this module with
 that Project's own values, not by writing new resource blocks per Project.
 
-Issue #7 adds this module only. It instantiates nothing — no `module` block anywhere in
-the repo calls it yet. Issue #8 performs the first concrete instantiation (the
-`homestreamlab` namespace placeholder).
+Issue #7 added this module. Issue #8 performed its first concrete
+instantiation: `terraform/platform/main.tf` declares `module "homestreamlab"`,
+calling this module with `project_name = "homestreamlab"` and this platform's
+approved quota policy values. This module itself remains generic and
+reusable — only its caller is project-specific.
 
 ## Inputs
 

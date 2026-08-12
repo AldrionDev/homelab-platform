@@ -5,9 +5,12 @@ execution mode, and the `kubernetes` and `helm` providers pointed at this host's
 k3s cluster. The root module lives in
 [`terraform/platform/`](../terraform/platform/).
 
-This bootstrap deliberately declares **no Kubernetes resources**. The reusable
-namespace and ResourceQuota pattern is issue #7; the `homestreamlab` namespace
-placeholder is issue #8.
+This bootstrap (issue #6) itself declared no Kubernetes resources. The
+reusable namespace and ResourceQuota pattern is issue #7 (see
+[Namespace Pattern module](#namespace-pattern-module)); its first concrete
+instantiation — the `homestreamlab` Namespace and ResourceQuota — is issue #8
+(see
+[`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8)).
 
 ## Verification status
 
@@ -74,14 +77,17 @@ Rollback of the HCP workspace binding, and any workspace deletion or
 provenance-preflight STOP path, were **not** exercised — this issue's workspace
 was created clean and never needed either.
 
-**A permanent limitation, independent of the verification above:** because the
-configuration contains no resources or data sources that require Kubernetes API
-operations, the empty baseline plan — live or repo-local — is not evidence of
-live provider-to-cluster connectivity. Issue #7 adds the first real resources
-(the Namespace Pattern module — see [below](#namespace-pattern-module)), but its
-`plan-check.sh` verification deliberately never uses a real k3s kubeconfig or
-API endpoint either. The first real evidence of live provider-to-cluster
-connectivity arrives only with issue #8's first real `apply`.
+**A limitation of the evidence above, on its own:** because the
+empty-baseline configuration verified in issue #6 contained no resources or
+data sources that require Kubernetes API operations, that empty baseline plan
+— live or repo-local — was not by itself evidence of live provider-to-cluster
+connectivity. Issue #7 added the first real resources (the Namespace Pattern
+module — see [below](#namespace-pattern-module)), but its `plan-check.sh`
+verification deliberately never uses a real k3s kubeconfig or API endpoint
+either. **The first real evidence of live provider-to-cluster connectivity is
+issue #8's actual `apply`** — see
+[`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8)
+for the full record.
 
 ## Prerequisites
 
@@ -96,6 +102,7 @@ connectivity arrives only with issue #8's first real `apply`.
 
 | File | Role |
 | --- | --- |
+| `main.tf` | instantiates the Namespace Pattern module once, as `module "homestreamlab"` — see [`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8) |
 | `versions.tf` | `required_version`, the `cloud` block, provider constraints |
 | `providers.tf` | `kubernetes` and `helm` provider configuration |
 | `variables.tf` | `kubeconfig_path` (required), `kube_context` (defaults to `default`) |
@@ -317,13 +324,15 @@ is itself a hard failure.
 
 ## Namespace Pattern module
 
-Issue #7 adds the first real Kubernetes resources in this repo: a reusable
+Issue #7 added the first real Kubernetes resources in this repo: a reusable
 child module,
 [`terraform/modules/namespace-resourcequota/`](../terraform/modules/namespace-resourcequota/)
 (the **Namespace Pattern** — see `CONTEXT.md`), producing a `Namespace` and a
-matching `ResourceQuota` for any Project. It instantiates nothing itself — no
-`module` block anywhere in this repo calls it yet; issue #8 performs the first
-concrete instantiation (`homestreamlab`). See the module's own
+matching `ResourceQuota` for any Project. The module itself instantiates
+nothing — issue #8 is its first concrete caller, from
+`terraform/platform/main.tf` (see
+[`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8)).
+See the module's own
 [`README.md`](../terraform/modules/namespace-resourcequota/README.md) for its
 inputs, outputs, and naming convention.
 
@@ -374,8 +383,142 @@ property; a future provider release could behave differently. This script's
 safety instead comes entirely from never configuring a real backend, real
 credentials, or running `apply` — never from an assumption about provider
 connectivity behavior. **`plan-check.sh` passing is not evidence of live
-provider-to-cluster connectivity.** The first real such evidence is deferred
-to issue #8's actual `apply`.
+provider-to-cluster connectivity.** That real evidence now exists — see
+[`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8)
+below.
+
+## homestreamlab namespace instantiation (issue #8)
+
+`terraform/platform/main.tf` calls the Namespace Pattern module once:
+
+```hcl
+module "homestreamlab" {
+  source = "../modules/namespace-resourcequota"
+
+  project_name = "homestreamlab"
+
+  cpu_request    = "1"
+  cpu_limit      = "2"
+  memory_request = "2Gi"
+  memory_limit   = "4Gi"
+}
+```
+
+The four quota values are explicitly approved platform policy for this
+project, not derived from any value committed elsewhere in this repository.
+
+### Workflow followed
+
+1. **Repo-local validation** — `bash terraform/platform/validate.sh` (and
+   `terraform -chdir=terraform fmt -check -recursive`), against the isolated,
+   backend-disabled `TF_DATA_DIR` described in
+   [Repo-local validation](#repo-local-validation). This also exercises the
+   module's own `variable` `validation` blocks against the literal values
+   above, since they are no longer only reachable via `plan-check.sh`'s
+   throwaway values.
+2. **Live plan** — after confirming Execution Mode = Local for the
+   `homelab-platform` workspace in the HCP UI immediately beforehand, a real
+   `terraform plan` was run and saved to a plan file:
+
+   ```sh
+   cd terraform/platform
+   export TF_CLOUD_ORGANIZATION=<your-hcp-organization>
+   SCRATCH_DIR="$(umask 077; mktemp -d)"   # outside the repository
+   terraform init -input=false
+   terraform validate
+   terraform plan -input=false -out="$SCRATCH_DIR/homestreamlab.tfplan"
+   terraform show -json "$SCRATCH_DIR/homestreamlab.tfplan" \
+     > "$SCRATCH_DIR/homestreamlab-plan.json"
+   ```
+
+   The saved plan file is a potentially sensitive local artifact — same
+   handling as `terraform.tfvars` — kept outside the repository, at
+   restrictive permissions, never committed.
+3. **Machine-readable plan proof**, via `terraform show -json` + `jq` against
+   `homestreamlab-plan.json` (never the human-readable summary alone):
+   exactly 2 `resource_changes`; both `.change.actions == ["create"]`;
+   addresses exactly `module.homestreamlab.kubernetes_namespace_v1.this` and
+   `module.homestreamlab.kubernetes_resource_quota_v1.this`; namespace name
+   `homestreamlab`; ResourceQuota name `homestreamlab-quota` in namespace
+   `homestreamlab`; `spec.hard` exactly
+   `{"requests.cpu":"1","limits.cpu":"2","requests.memory":"2Gi","limits.memory":"4Gi"}`.
+   All assertions passed. Only after they passed did the human-readable
+   `Plan: 2 to add, 0 to change, 0 to destroy` summary count as
+   corroboration.
+4. **Apply** — the reviewed saved plan artifact was applied without
+   recomputing it:
+
+   ```sh
+   terraform apply "$SCRATCH_DIR/homestreamlab.tfplan"
+   ```
+
+   Applying the exact artifact that was JSON-inspected removes the window
+   for drift between plan and apply; it does not, however, prevent external
+   infrastructure drift from causing the apply itself to fail. `terraform
+   apply` reported `Apply complete! Resources: 2 added, 0 changed, 0
+   destroyed.` — the namespace and ResourceQuota were created successfully
+   and HCP Terraform's state updated accordingly.
+5. **Cleanup** — after apply, `$SCRATCH_DIR` (both the saved plan and its
+   JSON rendering) was deleted entirely; the working tree was confirmed clean
+   of any leaked artifact.
+6. **Runtime verification**, read-only:
+
+   ```sh
+   KC="$HOME/.kube/homelab-k3s.yaml"
+   kubectl --kubeconfig "$KC" get namespace homestreamlab
+   kubectl --kubeconfig "$KC" get resourcequota -n homestreamlab -o yaml
+   ```
+
+   Confirmed: `namespace/homestreamlab` exists with `status.phase == Active`;
+   `resourcequota/homestreamlab-quota` exists in `homestreamlab` with
+   `spec.hard` exactly matching the four approved values above. `pods`,
+   `deployments.apps`, `statefulsets.apps`, `daemonsets.apps`, `jobs.batch`,
+   `cronjobs.batch`, `services`, `ingresses.networking.k8s.io`, and `secrets`
+   were all confirmed empty in the namespace; `ingressroutes.traefik.io` (the
+   Traefik CRD is registered on this cluster) was also confirmed empty. A
+   namespace's Kubernetes-generated built-ins (`kube-root-ca.crt` ConfigMap,
+   `default` ServiceAccount) are expected and are not application resources.
+7. **Post-apply convergence plan** — a further real `terraform plan` (also a
+   live HCP/cluster interaction, gated the same as step 2, not run
+   automatically) reported `No changes. Your infrastructure matches the
+   configuration.`; its JSON rendering showed exactly the same two managed
+   resources, both with `.change.actions == ["no-op"]`, and zero non-no-op
+   changes elsewhere.
+
+### Rollback
+
+Kubernetes namespace deletion can remove **all** namespaced content in one
+action — not only what Terraform created. `-target` is therefore **not**
+used as the normal rollback strategy; a full, untargeted plan is required so
+nothing outside `module.homestreamlab`'s own two resources is silently swept
+in or missed.
+
+**Case A — immediate, same-issue rollback (before HomeStreamLab has ever been
+deployed into the namespace):**
+
+1. Inventory the namespace first and prove no application workload exists
+   beyond the ResourceQuota and Kubernetes-generated built-ins.
+2. Revert/remove the `module "homestreamlab"` block from `main.tf`.
+3. Run a normal, full `terraform plan` (no `-target`), saving both the
+   binary plan and its JSON, exactly as in the forward-apply flow above.
+4. Fail closed unless the plan JSON shows **exactly** the two expected
+   deletes and **zero** other changes anywhere.
+5. Apply only after a separate, explicit approval distinct from the plan
+   review.
+
+**Case B — later rollback (HomeStreamLab may by then have been deployed into
+the namespace, from its own separate repository):**
+
+1. **Stop.** Do not delete the namespace automatically or as a routine
+   Terraform operation.
+2. Coordinated application decommission/inventory must happen first, from
+   the `homestreamlab` application repository's own process.
+3. Only after the namespace is independently proven safe to remove may the
+   platform configuration be reverted here and a full (untargeted) destroy
+   plan reviewed, under the same fail-closed JSON gate and separate apply
+   approval as Case A.
+
+Do not run a broad `terraform destroy` as a routine rollback in either case.
 
 ## Verifying against HCP Terraform
 
@@ -401,10 +544,15 @@ Expected:
 - `validate` — `Success! The configuration is valid.`;
 - `plan` — **`No changes. Your infrastructure matches the configuration.`**
 
-The plan is empty because the configuration declares no resources and the new
-workspace's state is empty. `kubeconfig_path` still has to be set — it has no
-default — which is what proves the machine-specific value is wired through a
-variable rather than committed.
+The plan reports no changes because the configuration matches the
+workspace's current state — for the empty baseline (issue #6) that meant no
+resources on either side; after issue #8's apply it means the
+`homestreamlab` Namespace and ResourceQuota already exist and match
+`main.tf` exactly (see
+[`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8)).
+`kubeconfig_path` still has to be set — it has no default — which is what
+proves the machine-specific value is wired through a variable rather than
+committed.
 
 Then, in the HCP UI, confirm that **the `terraform plan` created no new run**:
 compare the Runs list against the baseline recorded during setup. The newest run
@@ -429,9 +577,10 @@ git status --ignored --short -- terraform/
 Stage explicit paths only — never `git add -A`:
 
 ```sh
-git add terraform/platform/versions.tf terraform/platform/providers.tf \
-        terraform/platform/variables.tf terraform/platform/terraform.tfvars.example \
-        terraform/platform/validate.sh terraform/platform/.terraform.lock.hcl \
+git add terraform/platform/main.tf terraform/platform/versions.tf \
+        terraform/platform/providers.tf terraform/platform/variables.tf \
+        terraform/platform/terraform.tfvars.example terraform/platform/validate.sh \
+        terraform/platform/.terraform.lock.hcl \
         docs/terraform-runbook.md \
         .gitignore .env.example README.md CLAUDE.md
 git rm terraform/platform/.gitkeep
@@ -497,13 +646,12 @@ client certificate stays valid. Real revocation means resetting k3s (see
 
 - The cheapest rollback is not binding at all: if the provenance preflight fails,
   no `terraform init` runs and there is nothing to undo.
-- While the workspace's state is empty, deleting it (Settings → Destruction and
-  Deletion) destroys no real infrastructure.
-- After issue #8 applies resources this is no longer true: deleting the
-  workspace would orphan Terraform-managed cluster resources. Issue #7 adds
-  only a reusable module (see [Namespace Pattern
-  module](#namespace-pattern-module)) — it never runs `apply`, so it does not
-  change this on its own.
+- This applied to the workspace's empty-state period only (through issue #7).
+  Since issue #8's apply, the workspace's state is **not** empty: deleting
+  the workspace now would orphan the real `homestreamlab` Namespace and
+  ResourceQuota it manages. Removing those resources first (see
+  [`homestreamlab` namespace instantiation → Rollback](#homestreamlab-namespace-instantiation-issue-8))
+  is a prerequisite to any workspace deletion, not an afterthought.
 - Switching Execution Mode back to Remote is not a rollback — it violates
   ADR-0001 and breaks every apply against this cluster.
 
@@ -513,8 +661,9 @@ client certificate stays valid. Real revocation means resetting k3s (see
   runners cannot reach this LAN-only k3s API (ADR-0001).
 - The kubeconfig copy is a **cluster-admin client credential**. Keep it at mode
   `0600`, outside the repository, and never print its contents.
-- Terraform state is stored in HCP Terraform, a third-party service. It is empty
-  for this issue; from issue #7 onward it will describe cluster resources.
+- Terraform state is stored in HCP Terraform, a third-party service. It was
+  empty through issue #7; issue #8's apply is what first made it describe
+  real cluster resources (the `homestreamlab` Namespace and ResourceQuota).
 - No machine-specific value ever goes into an HCP workspace variable.
 - This issue changes no host service: no systemd unit, no `/etc`, no k3s, no UFW,
   no Docker. The only host-touching step is the user-owned kubeconfig copy, which
