@@ -77,8 +77,11 @@ was created clean and never needed either.
 **A permanent limitation, independent of the verification above:** because the
 configuration contains no resources or data sources that require Kubernetes API
 operations, the empty baseline plan — live or repo-local — is not evidence of
-live provider-to-cluster connectivity. The first real evidence arrives with
-issue #7's first resource.
+live provider-to-cluster connectivity. Issue #7 adds the first real resources
+(the Namespace Pattern module — see [below](#namespace-pattern-module)), but its
+`plan-check.sh` verification deliberately never uses a real k3s kubeconfig or
+API endpoint either. The first real evidence of live provider-to-cluster
+connectivity arrives only with issue #8's first real `apply`.
 
 ## Prerequisites
 
@@ -97,8 +100,13 @@ issue #7's first resource.
 | `providers.tf` | `kubernetes` and `helm` provider configuration |
 | `variables.tf` | `kubeconfig_path` (required), `kube_context` (defaults to `default`) |
 | `terraform.tfvars.example` | committed template, placeholders only |
-| `validate.sh` | repo-local validation: fmt, validate, leak gate |
+| `validate.sh` | repo-local validation: fmt, validate, leak gate — also now covers `terraform/modules/*/`, see [Namespace Pattern module](#namespace-pattern-module) |
 | `.terraform.lock.hcl` | committed provider lock — see [below](#why-the-lockfile-is-committed) |
+
+Reusable child modules live under
+[`terraform/modules/`](../terraform/modules/), sibling to `platform/`. Each
+module directory never carries its own committed `.terraform.lock.hcl` — see
+[Namespace Pattern module](#namespace-pattern-module).
 
 ### Workspace identity
 
@@ -307,6 +315,68 @@ there is no matcher-failure mode there to misread as "clean"; content checks
 still use `grep`, wrapped so any exit status other than "match" or "no match"
 is itself a hard failure.
 
+## Namespace Pattern module
+
+Issue #7 adds the first real Kubernetes resources in this repo: a reusable
+child module,
+[`terraform/modules/namespace-resourcequota/`](../terraform/modules/namespace-resourcequota/)
+(the **Namespace Pattern** — see `CONTEXT.md`), producing a `Namespace` and a
+matching `ResourceQuota` for any Project. It instantiates nothing itself — no
+`module` block anywhere in this repo calls it yet; issue #8 performs the first
+concrete instantiation (`homestreamlab`). See the module's own
+[`README.md`](../terraform/modules/namespace-resourcequota/README.md) for its
+inputs, outputs, and naming convention.
+
+### Validation coverage
+
+`bash terraform/platform/validate.sh` now also validates every directory under
+`terraform/modules/*/`, including this one: it copies each module's `.tf`
+files into an isolated scratch directory and runs `terraform init
+-backend=false` + `terraform validate` there — never against the module
+directory itself, since `terraform init` always writes `.terraform.lock.hcl`
+next to the config files it runs against, and a committed module-level
+lockfile is exactly what this repo must avoid. The leak gate also now rejects
+any committed `terraform/modules/*/.terraform.lock.hcl` as defense-in-depth.
+
+### Throwaway plan verification
+
+```sh
+bash terraform/modules/namespace-resourcequota/plan-check.sh
+```
+
+This asserts, via `terraform show -json` captured to a file and then read by
+`jq` in separate assertions (never text-matching on human-readable plan
+output), that instantiating the module with
+representative throwaway values plans **exactly** two resource creates — a
+`Namespace` and a matching `ResourceQuota`, with the expected names,
+namespace, and `spec.hard` values — failing closed on any mismatch,
+extra/missing resource, or non-`create` action. `jq` is a hard prerequisite;
+the script fails closed if it is missing rather than skipping the check.
+
+**Its precise contract:**
+
+- repo-local verification only;
+- no HCP Terraform backend or state is ever configured;
+- no real k3s kubeconfig or API endpoint is ever used — the kubeconfig it
+  writes carries no real cluster credentials and names no real cluster;
+- `terraform apply` is never run;
+- `terraform init` may still contact the public Terraform provider registry to
+  download the provider plugin — this is **not** an offline or network-free
+  check in that sense.
+
+**What it does not prove:** that the `kubernetes` provider can reach a real
+Kubernetes API server, or that `terraform apply` would succeed against one.
+One empirical observation motivated this design — with the tested provider
+version (`hashicorp/kubernetes` 3.2.1) and an empty throwaway state, planning
+these two brand-new resources did not require reaching a live API server —
+but that is a narrow, version-specific observation, not a relied-upon safety
+property; a future provider release could behave differently. This script's
+safety instead comes entirely from never configuring a real backend, real
+credentials, or running `apply` — never from an assumption about provider
+connectivity behavior. **`plan-check.sh` passing is not evidence of live
+provider-to-cluster connectivity.** The first real such evidence is deferred
+to issue #8's actual `apply`.
+
 ## Verifying against HCP Terraform
 
 This sequence has been run against the live `homelab-platform` workspace with
@@ -429,8 +499,11 @@ client certificate stays valid. Real revocation means resetting k3s (see
   no `terraform init` runs and there is nothing to undo.
 - While the workspace's state is empty, deleting it (Settings → Destruction and
   Deletion) destroys no real infrastructure.
-- After issues #7 and #8 apply resources this is no longer true: deleting the
-  workspace would orphan Terraform-managed cluster resources.
+- After issue #8 applies resources this is no longer true: deleting the
+  workspace would orphan Terraform-managed cluster resources. Issue #7 adds
+  only a reusable module (see [Namespace Pattern
+  module](#namespace-pattern-module)) — it never runs `apply`, so it does not
+  change this on its own.
 - Switching Execution Mode back to Remote is not a rollback — it violates
   ADR-0001 and breaks every apply against this cluster.
 
@@ -451,18 +524,26 @@ client certificate stays valid. Real revocation means resetting k3s (see
 
 ```sh
 bash terraform/platform/validate.sh
+bash terraform/modules/namespace-resourcequota/plan-check.sh
 ```
 
-There are no unit tests for this component: the module declares no resources and
-no logic, so the meaningful behavioural checks are formatting, configuration
+There are no unit tests for the root module: it declares no resources and no
+logic, so the meaningful behavioural checks are formatting, configuration
 validity, the provider lock, and the leak gate — which is exactly what
-`validate.sh` runs. The live `terraform init` and empty `terraform plan` against
-HCP Terraform are covered under
+`validate.sh` runs (now also covering every `terraform/modules/*/` child
+module, including `namespace-resourcequota`). The live `terraform init` and
+empty `terraform plan` against HCP Terraform are covered under
 [Verifying against HCP Terraform](#verifying-against-hcp-terraform).
+
+The `namespace-resourcequota` module does declare real resources, so it has
+its own behavioural check: `plan-check.sh`, asserting the exact expected plan
+output — see [Namespace Pattern module](#namespace-pattern-module) for its
+precise contract.
 
 ShellCheck is not assumed to be installed on the host. Run it in a container:
 
 ```sh
 docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:stable \
-  terraform/platform/validate.sh
+  terraform/platform/validate.sh \
+  terraform/modules/namespace-resourcequota/plan-check.sh
 ```

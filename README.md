@@ -21,8 +21,14 @@ execution mode, with the `kubernetes` and `helm` providers configured against
 this host's k3s cluster — is **implemented and verified**: the HCP workspace
 exists in Local execution mode, `terraform init` initializes successfully
 against it, and `terraform plan` reports no changes against the empty baseline.
-This bootstrap deploys **no Kubernetes resources**; the namespace and
-ResourceQuota pattern is still planned (#7/#8). See
+This bootstrap deploys no Kubernetes resources itself. The reusable Namespace
+Pattern — a child module producing a `Namespace` and matching `ResourceQuota`
+for any Project — is implemented under
+[`terraform/modules/namespace-resourcequota/`](./terraform/modules/namespace-resourcequota/)
+and repo-locally verified (`validate.sh` + `plan-check.sh`; see
+[`docs/terraform-runbook.md#namespace-pattern-module`](./docs/terraform-runbook.md#namespace-pattern-module)).
+It instantiates no real project — that, and the first real cluster-connected
+`apply`, is issue #8. See
 [`docs/terraform-runbook.md`](./docs/terraform-runbook.md#verification-status).
 
 Every other platform component is still planned.
@@ -239,6 +245,9 @@ exact boundary of what was and was not exercised.
 - `dnsmasq/` — wildcard DNS: `install.sh`, `rollback.sh`, `smoke-test.sh`, `lib.sh`,
   and their tests
 - `registry/` — local Docker registry: `docker-compose.yml` and `smoke-test.sh`
-- `terraform/platform/` — the Platform's HCP-backed Terraform root module;
-  namespaces and resource quotas are added later
+- `terraform/platform/` — the Platform's HCP-backed Terraform root module; no
+  concrete project is instantiated here (that's issue #8)
+- `terraform/modules/namespace-resourcequota/` — the reusable Namespace
+  Pattern child module (`Namespace` + matching `ResourceQuota`), with its own
+  repo-local throwaway-plan verification (`plan-check.sh`)
 - `backup/` — local backup routine
