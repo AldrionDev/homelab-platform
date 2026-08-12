@@ -163,10 +163,42 @@ Implemented and verified:
   permissions, and deleted after use. No Deployment, Service, IngressRoute,
   Secret, ConfigMap, Helm release, or Jenkinsfile exists as a result of this
   issue. Runbook: `docs/terraform-runbook.md`.
+- generic local backup/restore mechanism — script-only (no CronJob or other
+  scheduler), fully application-independent. `backup/backup.sh` requires
+  `BACKUP_DESTINATION` (absolute, must already exist, must already be mode
+  `0700`, no default, never created/`chmod`'d by the script), `BACKUP_ID`
+  (`[A-Za-z0-9-]+`), and `BACKUP_SOURCE_KIND` (`dir`|`db`); dir mode requires
+  `BACKUP_SOURCE_DIR`; db mode requires `BACKUP_LIVE_DATA_PATH` (a pure
+  locality guard, never read/archived) plus a dump-producer executed
+  directly as argv after `--` (never `eval`, never a shell string).
+  `backup/restore.sh` requires `BACKUP_ARCHIVE`, a not-yet-existing
+  `RECOVERY_TARGET`, `RESTORE_LIVE_DATA_PATH`, and a required
+  workload-validator argv after `--`. Shared helpers: `backup/lib.sh`. The
+  archive-contract validator `backup/tar_metadata_check.py` (Python 3
+  standard library only, no pip packages — the one dependency this feature
+  adds) implements ADR-0004's full member-path/type, layout, manifest, and
+  payload-consistency checks via `tarfile`, run synchronously before backup
+  publication and before restore extraction — never by parsing `tar -tv`
+  text. Publication is checksum-first/archive-last via collision-refusing
+  hardlinks (archive visibility is the validity boundary); restore
+  snapshots the external archive exactly once and never reopens it; the
+  Recovery Target is claimed via `mkdir` and destructively cleaned up only
+  when a device+inode+random-token (`secrets.token_hex(32)`) ownership
+  proof matches. No automatic pruning or retention. Tests:
+  `backup/lib.test.sh`, `backup/tar_metadata_check.test.sh`,
+  `backup/backup.test.sh`, `backup/restore.test.sh`. Runbook:
+  `docs/backup-runbook.md`. **Verified with smoke/dummy data only, entirely
+  under `mktemp` scratch directories**: 177 passing test cases
+  (61+41+37+38), 0 failures, covering both the directory-payload path and a
+  synthetic opaque-dump db-payload path, plus one continuous 13-step
+  end-to-end scenario matching issue #9's acceptance steps. **Not
+  verified**: any real project/application data, any real PostgreSQL or
+  other database engine (the synthetic dump smoke test proves byte-exact
+  transport only, never `pg_dump`/`pg_restore` compatibility), and no
+  HomeStreamLab-specific wiring exists anywhere in this repository.
 
 Planned platform pieces:
 
-- generic local backup routine
 - platform runbook
 
 This repo is **platform-only**.
