@@ -33,6 +33,16 @@ apply` against this host's cluster and verified live — see
 This repository manages only that Namespace and ResourceQuota — no
 HomeStreamLab application resource exists here or is deployed by this repo.
 
+The generic local backup and restore mechanism — timestamped `tar.gz`
+archives with SHA-256 sidecars, application-independent, script-only — is
+**implemented and verified with smoke/dummy data only**: 177 passing test
+cases across four suites, entirely under `mktemp` scratch directories, plus
+one continuous end-to-end scenario matching the issue's acceptance steps. No
+real project data, no real PostgreSQL, and no HomeStreamLab integration have
+exercised it yet — see
+[`docs/backup-runbook.md`](./docs/backup-runbook.md#verification-status) for
+the exact evidence and boundaries.
+
 Every other platform component is still planned.
 
 See [`CLAUDE.md`](./CLAUDE.md) for the current milestone, scope, and planned
@@ -237,6 +247,40 @@ the runbook's
 [`homestreamlab` namespace instantiation](./docs/terraform-runbook.md#homestreamlab-namespace-instantiation-issue-8)
 section for the exact evidence.
 
+## Backup
+
+A generic, application-independent local backup and restore mechanism:
+timestamped `tar.gz` archives with SHA-256 sidecars, published only after a
+full structural/manifest validation, restored only into an explicitly
+separate Recovery Target with a required workload-specific validator.
+Script-only — there is no CronJob or other scheduler — and supports either a
+filesystem/data-directory payload or an opaque database-style dump produced
+by an external command.
+
+```sh
+BACKUP_DESTINATION=/absolute/path/to/backup-destination \
+BACKUP_ID=example-workload BACKUP_SOURCE_KIND=dir \
+BACKUP_SOURCE_DIR=/absolute/path/to/live-data \
+  bash backup/backup.sh
+```
+
+The backup destination has no built-in default, must already exist, and
+must already be mode `0700` — this repository never creates or `chmod`s it
+for you. Restore always requires a separate, not-yet-existing Recovery
+Target and a workload-specific validator; nothing is ever written directly
+over live data. There is no automatic pruning or retention — the operator
+owns destination capacity.
+
+Full interface, safety model, permissions, retention, and verified evidence
+are in [`docs/backup-runbook.md`](./docs/backup-runbook.md).
+
+**Status: verified with smoke/dummy data only** — four test suites, 177
+passing cases, 0 failures, entirely under `mktemp` scratch directories. No
+real project data, no real PostgreSQL, and no HomeStreamLab integration —
+see
+[`docs/backup-runbook.md#verification-status`](./docs/backup-runbook.md#verification-status)
+for the exact evidence and boundaries.
+
 ## Layout
 
 - `docs/` — platform documentation and runbooks
@@ -248,6 +292,8 @@ section for the exact evidence.
     operations, verification, and rollback
   - [`docs/terraform-runbook.md`](./docs/terraform-runbook.md) — HCP workspace
     setup, kubeconfig handling, validation, verification, and rollback
+  - [`docs/backup-runbook.md`](./docs/backup-runbook.md) — backup/restore
+    usage, safety model, permissions, retention, and verified evidence
   - `docs/adr/` — architecture decision records
 - `k3s/` — k3s install script and the local-registry pull test
 - `dnsmasq/` — wildcard DNS: `install.sh`, `rollback.sh`, `smoke-test.sh`, `lib.sh`,
@@ -258,4 +304,6 @@ section for the exact evidence.
 - `terraform/modules/namespace-resourcequota/` — the reusable Namespace
   Pattern child module (`Namespace` + matching `ResourceQuota`), with its own
   repo-local throwaway-plan verification (`plan-check.sh`)
-- `backup/` — local backup routine
+- `backup/` — the generic backup/restore mechanism: `backup.sh`, `restore.sh`,
+  shared helpers in `lib.sh`, the Python archive-contract validator
+  `tar_metadata_check.py`, and their tests
