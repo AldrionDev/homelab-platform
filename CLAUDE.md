@@ -93,14 +93,40 @@ Implemented and verified:
   reports "No changes. Your infrastructure matches the configuration." against
   the empty baseline, with the workspace showing 0 resources, unlocked, and no
   saved state afterward. This bootstrap declares **no Kubernetes resources**
-  (those are #7/#8). **Not runtime-exercised**: provider-to-cluster
+  (#7 below adds the reusable Namespace + ResourceQuota pattern as a module,
+  not instantiated here; #8 is the concrete project instantiation and runtime
+  apply). **Not runtime-exercised**: provider-to-cluster
   connectivity — the configuration contains no resources or data sources
   requiring Kubernetes API operations, so the empty baseline plan is not
   evidence of a live provider connection. Runbook: `docs/terraform-runbook.md`.
+- Namespace Pattern Terraform module — a reusable, generic child module at
+  `terraform/modules/namespace-resourcequota/` (owns
+  `kubernetes_namespace_v1.this` and `kubernetes_resource_quota_v1.this`;
+  required inputs `project_name`, `cpu_request`, `cpu_limit`,
+  `memory_request`, `memory_limit`, no defaults; declares only
+  `required_providers`, no `provider`/backend/cloud block — it inherits the
+  caller's `kubernetes` provider). Repo-locally verified: `bash
+  terraform/platform/validate.sh` (extended to also `init`/`validate` every
+  `terraform/modules/*/` entry from an isolated scratch copy, never the
+  module directory itself, and to reject any committed module-level
+  `.terraform.lock.hcl`) and `bash
+  terraform/modules/namespace-resourcequota/plan-check.sh` (a throwaway plan
+  against a synthetic, non-functional kubeconfig, asserting via `terraform
+  show -json` + `jq` exactly 2 resource creates —
+  `module.throwaway.kubernetes_namespace_v1.this` and
+  `module.throwaway.kubernetes_resource_quota_v1.this` — with the expected
+  name, namespace, and `spec.hard` values). No project is instantiated by
+  issue #7: no `module` block anywhere in this repo calls this module.
+  **Not live-verified**: `plan-check.sh` deliberately uses no real
+  kubeconfig, no real k3s API endpoint, no HCP backend/state, and never runs
+  `apply`, so passing it is not evidence of live Kubernetes
+  provider-to-cluster connectivity, and no rollback/runtime procedure has
+  been exercised for this component. Issue #8 remains the first concrete
+  project instantiation and the first real runtime `apply`. Runbook:
+  `docs/terraform-runbook.md`.
 
 Planned platform pieces:
 
-- Terraform-managed namespaces and ResourceQuotas
 - `homestreamlab` namespace placeholder only
 - generic local backup routine
 - platform runbook

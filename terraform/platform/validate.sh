@@ -11,9 +11,13 @@
 #   1. formatting, provider installation and configuration validation, run
 #      against an isolated, scratch TF_DATA_DIR — never the live
 #      terraform/platform/.terraform/ — so this check has no dependency on,
-#      and makes no change to, whatever state that directory happens to be in;
+#      and makes no change to, whatever state that directory happens to be in.
+#      This also covers every terraform/modules/*/ child module, each
+#      validated from an isolated scratch copy of its source rather than in
+#      place — see check_modules_init_and_validate;
 #   2. a leak gate that refuses machine-specific paths, Terraform state,
-#      local tfvars, Terraform CLI credentials and real credential material.
+#      local tfvars, Terraform CLI credentials, real credential material, and
+#      a committed dependency lockfile under terraform/modules/.
 #
 # The leak gate is content-based, never keyword-based, so this script and the
 # runbook can mention the credential key names as documentation and still be
@@ -45,10 +49,19 @@ CANDIDATE_SNAPSHOT=""
 # directory, used instead of the live terraform/platform/.terraform/.
 TF_VALIDATE_DATA_DIR=""
 
+# Populated by check_modules_init_and_validate: one scratch copy directory and
+# one scratch TF_DATA_DIR per terraform/modules/*/ entry. A child module is
+# never `init`-ed in place — see that function for why.
+MODULE_TEMP_DIRS=()
+
 # Single EXIT trap covering every piece of temporary state this script creates.
 cleanup_temp_state() {
   [[ -n "$CANDIDATE_SNAPSHOT" && -f "$CANDIDATE_SNAPSHOT" ]] && rm -f "$CANDIDATE_SNAPSHOT"
   [[ -n "$TF_VALIDATE_DATA_DIR" && -d "$TF_VALIDATE_DATA_DIR" ]] && rm -rf "$TF_VALIDATE_DATA_DIR"
+  local dir
+  for dir in "${MODULE_TEMP_DIRS[@]:-}"; do
+    [[ -n "$dir" && -d "$dir" ]] && rm -rf "$dir"
+  done
 }
 trap cleanup_temp_state EXIT
 
@@ -105,6 +118,12 @@ readonly ABSOLUTE_USER_PATH_PATTERN='/h[o]me/|/U[s]ers/|/r[o]ot/'
 # - *.tfplan
 # - the Terraform CLI's HCP credential file, and its containing directory
 readonly FORBIDDEN_PATH_PATTERN='(^|/)[^/]*\.tfvars$|\.tfstate($|\.)|(^|/)kubeconfig$|\.kubeconfig$|(^|/)\.kube/|(^|/)\.terraform/|\.tfplan$|(^|/)credentials\.tfrc\.json$|(^|/)\.terraform\.d/'
+
+# A child module must never carry its own committed dependency lockfile —
+# only terraform/platform/ does (see check_lockfile). Scoped to
+# terraform/modules/, so terraform/platform/.terraform.lock.hcl is never
+# matched by this pattern.
+readonly MODULE_LOCKFILE_PATTERN='^terraform/modules/[^/]+/\.terraform\.lock\.hcl$'
 
 # --- candidate set enumeration -------------------------------------------------
 
@@ -192,6 +211,56 @@ check_init_and_validate() {
   ok "terraform validate"
 }
 
+# Validates every terraform/modules/<name>/ directory as an isolated,
+# throwaway pseudo-root: copies its *.tf files into a fresh mktemp -d and
+# inits/validates the copy there, never the module directory itself.
+#
+# `terraform init` always writes .terraform.lock.hcl next to the config files
+# it inits against, regardless of TF_DATA_DIR — so initing a module directory
+# in place would deposit a lockfile under terraform/modules/, which this repo
+# never commits (see check_no_module_lockfile) and would otherwise become a
+# stray, uncommitted artifact. Copying the module's source into a scratch
+# directory keeps that lockfile out of the repo entirely, while still
+# validating the actual module source (a byte-for-byte copy, not a rewritten
+# stand-in).
+#
+# Silently does nothing if terraform/modules/ does not exist yet, so this
+# check does not fail on a checkout that predates it.
+check_modules_init_and_validate() {
+  local modules_root="${TERRAFORM_ROOT}/modules"
+
+  if [[ ! -d "$modules_root" ]]; then
+    ok "no terraform/modules/ tree present; nothing to validate"
+    return 0
+  fi
+
+  local module_dir module_name found=0 copy_dir data_dir
+  for module_dir in "$modules_root"/*/; do
+    [[ -d "$module_dir" ]] || continue
+    found=1
+    module_name="$(basename "$module_dir")"
+
+    copy_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-tf-validate-module.XXXXXX")"
+    data_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-tf-validate-module-data.XXXXXX")"
+    MODULE_TEMP_DIRS+=("$copy_dir" "$data_dir")
+
+    cp "${module_dir}"*.tf "$copy_dir"/ 2>/dev/null \
+      || die "no .tf files found directly in ${module_dir}"
+
+    TF_DATA_DIR="$data_dir" \
+      terraform -chdir="$copy_dir" init -backend=false -input=false >/dev/null \
+      || die "terraform init -backend=false failed for module '${module_name}'"
+
+    TF_DATA_DIR="$data_dir" \
+      terraform -chdir="$copy_dir" validate \
+      || die "terraform validate failed for module '${module_name}'"
+
+    ok "terraform validate (module: ${module_name}; isolated copy, no lockfile left under terraform/modules/)"
+  done
+
+  [[ "$found" -eq 1 ]] || die "terraform/modules/ exists but contains no module directories"
+}
+
 # --- leak gate ----------------------------------------------------------------
 
 # Path-only check: matched against the candidate path string, never file
@@ -205,6 +274,22 @@ check_no_forbidden_paths() {
   [[ -z "$offenders" ]] \
     || die "state / tfvars / kubeconfig / plan / CLI-credential files must never be committed:"$'\n'"$offenders"
   ok "no state, tfvars, kubeconfig, plan or CLI-credential files in the candidate set"
+}
+
+# Defense-in-depth: a child module must never carry its own committed
+# dependency lockfile (only terraform/platform/ does — see check_lockfile).
+# check_modules_init_and_validate never inits a module directory in place, so
+# this should never trigger from this script's own behavior; it exists to
+# catch a future contributor who ran `terraform init` by hand inside a module
+# directory and left the result tracked or untracked-but-not-ignored.
+check_no_module_lockfile() {
+  local offenders="" file
+  while IFS= read -r -d '' file; do
+    [[ "$file" =~ $MODULE_LOCKFILE_PATTERN ]] && offenders+="${file}"$'\n'
+  done < <(candidate_files)
+  [[ -z "$offenders" ]] \
+    || die "a child module must never carry its own committed .terraform.lock.hcl — only terraform/platform/ does:"$'\n'"$offenders"
+  ok "no committed .terraform.lock.hcl under terraform/modules/"
 }
 
 check_no_credential_material() {
@@ -275,9 +360,11 @@ main() {
   check_terraform_available
   check_fmt
   check_init_and_validate
+  check_modules_init_and_validate
   check_lockfile
   check_candidate_enumeration
   check_no_forbidden_paths
+  check_no_module_lockfile
   check_no_credential_material
   check_no_machine_specific_paths
   check_no_hcp_organization
