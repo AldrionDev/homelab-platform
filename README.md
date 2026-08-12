@@ -284,6 +284,9 @@ for the exact evidence and boundaries.
 ## Layout
 
 - `docs/` — platform documentation and runbooks
+  - [`docs/runbook.md`](./docs/runbook.md) — the platform runbook:
+    fresh-machine bootstrap order, day-to-day operations, disaster recovery,
+    and onboarding a new project
   - [`docs/k3s-runbook.md`](./docs/k3s-runbook.md) — k3s install, operations,
     verification, and the destructive reset procedure
   - [`docs/registry-runbook.md`](./docs/registry-runbook.md) — registry
