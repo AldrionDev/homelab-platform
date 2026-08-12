@@ -76,11 +76,31 @@ Implemented and verified:
   that check as "if convenient," no `ufw` mutation was performed, and none is
   automated by this component. See the runbook's Verification status section
   before claiming more than this.
+- HCP Terraform remote state with Local execution mode — the Platform Terraform
+  Workspace, `terraform/platform/` (`versions.tf` pins
+  `required_version = "~> 1.15"`, a `cloud` block naming the `homelab-platform`
+  workspace per ADR-0002, and `hashicorp/kubernetes ~> 3.2` /
+  `hashicorp/helm ~> 3.2`); `providers.tf` configures both providers from
+  `var.kubeconfig_path`; the machine-specific path lives in a gitignored
+  `terraform.tfvars`, and the HCP organization only in `TF_CLOUD_ORGANIZATION`.
+  Repo-local gate: `bash terraform/platform/validate.sh` (fmt, `init
+  -backend=false`, validate, leak gate) — verified locally on Terraform
+  v1.15.8, with the lock file selecting `helm` 3.2.0 and `kubernetes` 3.2.1.
+  Live-verified: the `homelab-platform` HCP workspace exists with Execution
+  Mode Local; `terraform -chdir=terraform/platform init -input=false` against
+  it reports "HCP Terraform has been successfully initialized!"; `terraform
+  validate` reports the configuration valid; `terraform plan -input=false`
+  reports "No changes. Your infrastructure matches the configuration." against
+  the empty baseline, with the workspace showing 0 resources, unlocked, and no
+  saved state afterward. This bootstrap declares **no Kubernetes resources**
+  (those are #7/#8). **Not runtime-exercised**: provider-to-cluster
+  connectivity — the configuration contains no resources or data sources
+  requiring Kubernetes API operations, so the empty baseline plan is not
+  evidence of a live provider connection. Runbook: `docs/terraform-runbook.md`.
 
 Planned platform pieces:
 
 - Terraform-managed namespaces and ResourceQuotas
-- HCP Terraform remote state with Local execution mode
 - `homestreamlab` namespace placeholder only
 - generic local backup routine
 - platform runbook

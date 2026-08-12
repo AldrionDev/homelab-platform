@@ -1,11 +1,20 @@
 # Terraform
+# .terraform.lock.hcl is deliberately NOT ignored — see docs/terraform-runbook.md.
 .terraform/
-.terraform.lock.hcl
+.terraformrc
+terraform.rc
+credentials.tfrc.json
+.terraform.d/
 *.tfstate
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
 *.tfplan
+tfplan
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 crash.log
 crash.*.log
 
