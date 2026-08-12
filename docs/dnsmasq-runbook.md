@@ -107,7 +107,7 @@ configuration. See [Safety notes](#safety-notes).
 ```
 address=/<HOMELAB_DOMAIN>/<HOST_LAN_IP>
 listen-address=<HOST_LAN_IP>
-bind-interfaces
+bind-dynamic
 ```
 
 - `address=/domain/ip` matches the domain and **all** subdomains — this is what makes
@@ -116,10 +116,37 @@ bind-interfaces
   forwarding (via this host's `/etc/resolv.conf`) stays intact for every other domain,
   so a client pointed at dnsmasq gets full normal DNS resolution for anything that
   isn't `*.HOMELAB_DOMAIN`.
-- `listen-address` + `bind-interfaces` together force dnsmasq to bind only to
+- `listen-address` + `bind-dynamic` together force dnsmasq to bind only to
   `HOST_LAN_IP` — never `0.0.0.0`, which would expose it on every interface including
   any VPN or hotspot one (the same reasoning as `registry/docker-compose.yml`'s
   LAN-only port bind).
+
+#### Why `bind-dynamic` instead of `bind-interfaces`
+
+At boot, dnsmasq's systemd unit can start before `HOST_LAN_IP` has actually
+been assigned to the LAN interface. With `bind-interfaces`, dnsmasq requires
+the configured address to already exist and fails to start
+(`Cannot assign requested address`) if it doesn't; if this happens on every
+boot-time attempt, repeated failures can exhaust systemd's start-limit,
+leaving the unit enabled but failed for the rest of boot even after the
+address becomes available seconds later. `dnsmasq` still binds only to
+`HOST_LAN_IP`, never `0.0.0.0` — the same address-specific intent as before.
+
+`man dnsmasq` directly documents that `bind-dynamic` automatically listens on
+newly appearing interfaces/addresses, and upstream dnsmasq guidance
+recommends `bind-dynamic` specifically for the `Cannot assign requested
+address` startup case, since it can wait for the requested address/interface
+to become available rather than requiring it up front. This is why
+`bind-dynamic` was selected as the candidate fix for the boot-time race
+described above.
+
+This change does not alter systemd unit ordering or boot sequencing in any
+way — dnsmasq's unit still starts whenever systemd schedules it; `bind-dynamic`
+only changes how dnsmasq itself behaves if the configured address isn't yet
+present when it does. Whether this actually resolves the race on a given host
+across a real reboot is verified separately — see
+[Verification status](#verification-status) for what has and has not been
+confirmed.
 
 ### Why the system's own dnsmasq.conf is never touched
 
@@ -220,6 +247,18 @@ new values:
 sudo bash dnsmasq/rollback.sh
 sudo HOST_LAN_IP=<new-ip> HOMELAB_DOMAIN=<new-domain> bash dnsmasq/install.sh
 ```
+
+The same guard applies whenever the *rendered configuration itself* changes —
+for example a platform update to this component, not just a change in
+`HOST_LAN_IP`/`HOMELAB_DOMAIN`. An existing installation whose on-disk
+`homelab.conf` no longer byte-matches what the current `dnsmasq/install.sh`
+would render reports `mismatch` and refuses to reinstall in place, by the
+same `inspect_installation` logic. The supported way to pick up such a
+change is the same rollback-then-reinstall procedure above, never a manual
+edit of the managed files under `/etc`. Rolling back and reinstalling opens a
+temporary window with no wildcard `*.HOMELAB_DOMAIN` resolution — see
+[Rollback](#rollback) for exactly what is and isn't affected during that
+window.
 
 ## Rollback
 

@@ -192,11 +192,15 @@ run_case "validate_env: both set succeeds silently" '
 
 echo "== rendering =="
 
-run_case "render_homelab_conf produces the wildcard address/listen-address/bind-interfaces lines" '
+run_case "render_homelab_conf produces the wildcard address/listen-address/bind-dynamic lines" '
   out="$(render_homelab_conf "homelab.home.arpa" "192.0.2.10")"
   assert_contains "$out" "address=/homelab.home.arpa/192.0.2.10"
   assert_contains "$out" "listen-address=192.0.2.10"
-  assert_contains "$out" "bind-interfaces"
+  assert_contains "$out" "bind-dynamic"
+  if grep -qxF "bind-interfaces" <<< "$out"; then
+    echo "must not reintroduce bind-interfaces (does not tolerate late address assignment)"
+    exit 90
+  fi
   if grep -qE "^(no-resolv|no-hosts|server=)" <<< "$out"; then
     echo "must not disable normal upstream forwarding"
     exit 90
