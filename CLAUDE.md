@@ -92,13 +92,17 @@ Implemented and verified:
   validate` reports the configuration valid; `terraform plan -input=false`
   reports "No changes. Your infrastructure matches the configuration." against
   the empty baseline, with the workspace showing 0 resources, unlocked, and no
-  saved state afterward. This bootstrap declares **no Kubernetes resources**
-  (#7 below adds the reusable Namespace + ResourceQuota pattern as a module,
-  not instantiated here; #8 is the concrete project instantiation and runtime
-  apply). **Not runtime-exercised**: provider-to-cluster
-  connectivity — the configuration contains no resources or data sources
-  requiring Kubernetes API operations, so the empty baseline plan is not
-  evidence of a live provider connection. Runbook: `docs/terraform-runbook.md`.
+  saved state afterward. This bootstrap (issue #6) itself declares **no
+  Kubernetes resources** (#7 below adds the reusable Namespace +
+  ResourceQuota pattern as a module; #8 below performs the first concrete
+  project instantiation and the first real runtime `apply` against this same
+  workspace — see the `homestreamlab` namespace instantiation entry below).
+  **Not runtime-exercised by this empty-baseline plan itself**:
+  provider-to-cluster connectivity — the configuration contained no resources
+  or data sources requiring Kubernetes API operations at that point, so that
+  empty baseline plan was not by itself evidence of a live provider
+  connection; live provider connectivity is now evidenced by issue #8 below.
+  Runbook: `docs/terraform-runbook.md`.
 - Namespace Pattern Terraform module — a reusable, generic child module at
   `terraform/modules/namespace-resourcequota/` (owns
   `kubernetes_namespace_v1.this` and `kubernetes_resource_quota_v1.this`;
@@ -116,18 +120,52 @@ Implemented and verified:
   `module.throwaway.kubernetes_namespace_v1.this` and
   `module.throwaway.kubernetes_resource_quota_v1.this` — with the expected
   name, namespace, and `spec.hard` values). No project is instantiated by
-  issue #7: no `module` block anywhere in this repo calls this module.
-  **Not live-verified**: `plan-check.sh` deliberately uses no real
-  kubeconfig, no real k3s API endpoint, no HCP backend/state, and never runs
-  `apply`, so passing it is not evidence of live Kubernetes
-  provider-to-cluster connectivity, and no rollback/runtime procedure has
-  been exercised for this component. Issue #8 remains the first concrete
-  project instantiation and the first real runtime `apply`. Runbook:
-  `docs/terraform-runbook.md`.
+  issue #7 itself: no `module` block in `terraform/modules/` calls this
+  module from its own source.
+  **Not live-verified by issue #7's own checks**: `plan-check.sh`
+  deliberately uses no real kubeconfig, no real k3s API endpoint, no HCP
+  backend/state, and never runs `apply`, so passing it is not by itself
+  evidence of live Kubernetes provider-to-cluster connectivity. Issue #8
+  (below) is the first concrete caller of this module and the first real
+  runtime `apply`. Runbook: `docs/terraform-runbook.md`.
+- `homestreamlab` namespace instantiation — the first concrete caller of the
+  Namespace Pattern module: `terraform/platform/main.tf` declares
+  `module "homestreamlab"` (`source = "../modules/namespace-resourcequota"`,
+  `project_name = "homestreamlab"`), with these explicitly approved platform
+  quota policy values:
+  ```hcl
+  cpu_request    = "1"
+  cpu_limit      = "2"
+  memory_request = "2Gi"
+  memory_limit   = "4Gi"
+  ```
+  Repo-locally verified: `bash terraform/platform/validate.sh` passes with
+  this module block in place. Live-verified against the real
+  `homelab-platform` HCP workspace (Execution Mode confirmed Local in the HCP
+  UI immediately before planning) and this host's real k3s cluster: a real
+  `terraform plan` showed exactly 2 creates
+  (`module.homestreamlab.kubernetes_namespace_v1.this`,
+  `module.homestreamlab.kubernetes_resource_quota_v1.this`) with the expected
+  names and `spec.hard` values, verified via `terraform show -json` + `jq`,
+  not just the human-readable summary; the reviewed saved plan was applied
+  without recomputing it (external drift could still cause an apply to
+  fail); `terraform apply` reported `2 added, 0 changed, 0 destroyed`;
+  `kubectl get namespace homestreamlab` shows `Active`, and `kubectl get
+  resourcequota homestreamlab-quota -n homestreamlab -o yaml` shows
+  `spec.hard` matching the four values above exactly; `pods`,
+  `deployments.apps`, `statefulsets.apps`, `daemonsets.apps`, `jobs.batch`,
+  `cronjobs.batch`, `services`, `ingresses.networking.k8s.io`, `secrets`, and
+  (where the CRD is registered) `ingressroutes.traefik.io` were all confirmed
+  empty in the namespace; a subsequent real `terraform plan` reported `No
+  changes. Your infrastructure matches the configuration.` with both managed
+  resources appearing only as `no-op`. The saved plan and its JSON rendering
+  were kept outside this repository throughout, with restrictive
+  permissions, and deleted after use. No Deployment, Service, IngressRoute,
+  Secret, ConfigMap, Helm release, or Jenkinsfile exists as a result of this
+  issue. Runbook: `docs/terraform-runbook.md`.
 
 Planned platform pieces:
 
-- `homestreamlab` namespace placeholder only
 - generic local backup routine
 - platform runbook
 
