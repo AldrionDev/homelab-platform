@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars (gitignored) and set the real, machine-local values.
+# Never commit terraform.tfvars.
+#
+# k3s writes /etc/rancher/k3s/k3s.yaml as root:root 0600, which the user running
+# Terraform cannot read. Create a user-owned copy first, and refresh it when the
+# k3s admin certificates are rotated — see
+# docs/terraform-runbook.md#kubeconfig-for-terraform.
+
+kubeconfig_path = "/absolute/path/to/homelab-k3s.yaml"
+
+# k3s generates a single context named "default"; override only if your copy renames it.
+# kube_context = "default"

@@ -15,6 +15,16 @@ and dnsmasq wildcard DNS are implemented and verified on a real host. dnsmasq's
 LAN-device resolution from a second physical device is not yet exercised, since it
 needs a separate `ufw` change — see
 [`docs/dnsmasq-runbook.md`](./docs/dnsmasq-runbook.md#verification-status).
+
+The Platform Terraform Workspace — HCP Terraform remote state in **Local**
+execution mode, with the `kubernetes` and `helm` providers configured against
+this host's k3s cluster — is **implemented and verified**: the HCP workspace
+exists in Local execution mode, `terraform init` initializes successfully
+against it, and `terraform plan` reports no changes against the empty baseline.
+This bootstrap deploys **no Kubernetes resources**; the namespace and
+ResourceQuota pattern is still planned (#7/#8). See
+[`docs/terraform-runbook.md`](./docs/terraform-runbook.md#verification-status).
+
 Every other platform component is still planned.
 
 See [`CLAUDE.md`](./CLAUDE.md) for the current milestone, scope, and planned
@@ -167,6 +177,52 @@ approved `ufw` change this component's installer never performs automatically. S
 [`docs/dnsmasq-runbook.md`](./docs/dnsmasq-runbook.md#verification-status) for the
 exact boundary.
 
+## Terraform (platform workspace)
+
+The Platform's own Terraform root module lives in
+[`terraform/platform/`](./terraform/platform/): HCP Terraform for remote state,
+**Local** execution mode (ADR-0001), and the `kubernetes` and `helm` providers
+pointed at this host's k3s cluster.
+
+It deliberately declares **no Kubernetes resources** — the namespace and
+ResourceQuota pattern is a separate, still-planned piece of work. Running it
+therefore deploys nothing to the cluster.
+
+Repo-local checks (never contacts HCP Terraform, never touches the cluster):
+
+```sh
+bash terraform/platform/validate.sh
+```
+
+Against HCP Terraform, once the workspace exists in **Local** execution mode and
+a user-readable kubeconfig copy is configured:
+
+```sh
+cd terraform/platform
+export TF_CLOUD_ORGANIZATION=<your-hcp-organization>
+terraform init
+terraform plan     # expected: no changes
+```
+
+The workspace name is fixed in `versions.tf` (ADR-0002); only the
+account-specific organization comes from the environment. The kubeconfig path is
+machine-specific and lives in a gitignored `terraform.tfvars` — copy
+[`terraform/platform/terraform.tfvars.example`](./terraform/platform/terraform.tfvars.example)
+to start.
+
+Workspace creation, Local-mode setup, the kubeconfig copy and its refresh
+procedure, verification and rollback are all in
+[`docs/terraform-runbook.md`](./docs/terraform-runbook.md).
+
+**Status: implemented and verified.** The `homelab-platform` HCP workspace
+exists in Local execution mode; `terraform init`, `terraform validate` and
+`terraform plan` all succeed against it, with `plan` reporting no changes
+against the empty baseline. This does **not** demonstrate live
+provider-to-cluster connectivity — the configuration declares no resources or
+data sources that would require one — see the runbook's
+[Verification status](./docs/terraform-runbook.md#verification-status) for the
+exact boundary of what was and was not exercised.
+
 ## Layout
 
 - `docs/` — platform documentation and runbooks
@@ -176,10 +232,13 @@ exact boundary.
     operations, Docker daemon trust, reset, and rollback
   - [`docs/dnsmasq-runbook.md`](./docs/dnsmasq-runbook.md) — dnsmasq install,
     operations, verification, and rollback
+  - [`docs/terraform-runbook.md`](./docs/terraform-runbook.md) — HCP workspace
+    setup, kubeconfig handling, validation, verification, and rollback
   - `docs/adr/` — architecture decision records
 - `k3s/` — k3s install script and the local-registry pull test
 - `dnsmasq/` — wildcard DNS: `install.sh`, `rollback.sh`, `smoke-test.sh`, `lib.sh`,
   and their tests
 - `registry/` — local Docker registry: `docker-compose.yml` and `smoke-test.sh`
-- `terraform/platform/` — Terraform-managed namespaces and resource quotas
+- `terraform/platform/` — the Platform's HCP-backed Terraform root module;
+  namespaces and resource quotas are added later
 - `backup/` — local backup routine
