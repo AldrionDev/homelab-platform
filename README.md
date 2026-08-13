@@ -284,6 +284,8 @@ for the exact evidence and boundaries.
 ## Layout
 
 - `docs/` — platform documentation and runbooks
+  - [`docs/showcase.html`](./docs/showcase.html) — self-contained, static
+    demo/overview page (Hungarian) for live presentations of the project
   - [`docs/runbook.md`](./docs/runbook.md) — the platform runbook:
     fresh-machine bootstrap order, day-to-day operations, disaster recovery,
     and onboarding a new project
