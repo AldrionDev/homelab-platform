@@ -163,6 +163,36 @@ Implemented and verified:
   permissions, and deleted after use. No Deployment, Service, IngressRoute,
   Secret, ConfigMap, Helm release, or Jenkinsfile exists as a result of this
   issue. Runbook: `docs/terraform-runbook.md`.
+- HomeStreamLab deployment identity — `terraform/platform/homestreamlab-deployer.tf`
+  in the same `homelab-platform` HCP workspace, declaring exactly five objects:
+  `kubernetes_service_account_v1.homestreamlab_deployer` (`homestreamlab-deployer`
+  in the existing `homestreamlab` namespace, `automount_service_account_token =
+  false`); a namespace-scoped `kubernetes_role_v1` + `kubernetes_role_binding_v1`
+  `homestreamlab-deployer` granting `["get","create","patch","delete"]` on
+  `secrets` and `persistentvolumeclaims` only (the exact CRUD lifecycle
+  `hashicorp/kubernetes` 3.2.1 performs for HomeStreamLab's current
+  `kubernetes_secret_v1` / `kubernetes_persistent_volume_claim_v1` — no `update`
+  (provider uses JSON Patch), no `list`, no `watch`); and one narrow,
+  operator-approved cluster-scoped exception
+  `kubernetes_cluster_role_v1` + `kubernetes_cluster_role_binding_v1`
+  `homestreamlab-deployer-namespace-read` granting `verbs ["get"]` on
+  `namespaces` restricted by `resource_names ["homestreamlab"]` (required because
+  HomeStreamLab's Terraform reads the cluster-scoped `Namespace/homestreamlab`
+  via `data "kubernetes_namespace_v1"`). Bound to the deployer ServiceAccount
+  only. The `homestreamlab` Namespace/ResourceQuota are referenced via
+  `module.homestreamlab.namespace_name` and never recreated. No new provider →
+  `.terraform.lock.hcl` unchanged. Terraform manages **no** ServiceAccount
+  token, `Secret`, or kubeconfig — that material is operator-issued after apply
+  and never enters Terraform state/variables/outputs or Git; the credential and
+  self-contained kubeconfig handoff (LAN endpoint `https://<HOST_LAN_IP>:6443`,
+  normal TLS, for `local-jenkins-platform` credential `k3s-homestreamlab`) is an
+  operator procedure. Runbook: `docs/homestreamlab-deployer-runbook.md`.
+  **Repo-locally verified only** (`bash terraform/platform/validate.sh`,
+  `terraform fmt -check -recursive`). **Not yet live-verified**: no
+  `terraform plan`/`apply` against the HCP workspace, no ServiceAccount token or
+  kubeconfig issued, and the positive/negative `kubectl auth can-i` RBAC matrix
+  in the runbook has not been run. Update this entry with the gated
+  plan/apply + RBAC verification evidence once it exists.
 - generic local backup/restore mechanism — script-only (no CronJob or other
   scheduler), fully application-independent. `backup/backup.sh` requires
   `BACKUP_DESTINATION` (absolute, must already exist, must already be mode

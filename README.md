@@ -30,8 +30,16 @@ This root module now instantiates that pattern once, for HomeStreamLab: a
 `homestreamlab` Namespace and ResourceQuota, created by a real `terraform
 apply` against this host's cluster and verified live — see
 [`docs/terraform-runbook.md`](./docs/terraform-runbook.md#homestreamlab-namespace-instantiation-issue-8).
-This repository manages only that Namespace and ResourceQuota — no
-HomeStreamLab application resource exists here or is deployed by this repo.
+It also manages HomeStreamLab's **deployment identity** (issue #31): a
+`homestreamlab-deployer` ServiceAccount plus a least-privilege
+Role/RoleBinding and one narrow `get Namespace/homestreamlab` ClusterRole, so a
+future `local-jenkins-platform` job can deploy HomeStreamLab without the host
+administrator kubeconfig — see
+[`docs/homestreamlab-deployer-runbook.md`](./docs/homestreamlab-deployer-runbook.md).
+This repository manages the Namespace, ResourceQuota and that deployment
+identity/RBAC — no HomeStreamLab application resource exists here or is deployed
+by this repo, and no ServiceAccount token or kubeconfig is Terraform-managed or
+committed.
 
 The generic local backup and restore mechanism — timestamped `tar.gz`
 archives with SHA-256 sidecars, application-independent, script-only — is
@@ -205,9 +213,14 @@ pointed at this host's k3s cluster.
 It instantiates the reusable Namespace Pattern module
 ([`terraform/modules/namespace-resourcequota/`](./terraform/modules/namespace-resourcequota/))
 once, in `terraform/platform/main.tf`, reserving the `homestreamlab`
-Namespace and a matching ResourceQuota. No other Kubernetes resource is
-declared here — no Deployment, Service, Ingress/IngressRoute, Secret, or Helm
-release belongs in this repository.
+Namespace and a matching ResourceQuota; and it declares HomeStreamLab's
+deployment identity in `terraform/platform/homestreamlab-deployer.tf` — a
+`homestreamlab-deployer` ServiceAccount, a least-privilege namespace-scoped
+Role/RoleBinding, and one narrow `get Namespace/homestreamlab` ClusterRole
+(see [`docs/homestreamlab-deployer-runbook.md`](./docs/homestreamlab-deployer-runbook.md)).
+No HomeStreamLab application resource is declared here — no Deployment, Service,
+Ingress/IngressRoute, application Secret, or Helm release belongs in this
+repository — and no ServiceAccount token or kubeconfig is Terraform-managed.
 
 Repo-local checks (never contacts HCP Terraform, never touches the cluster):
 
@@ -240,12 +253,15 @@ procedure, verification and rollback are all in
 
 **Status: implemented and verified.** The `homelab-platform` HCP workspace
 exists in Local execution mode; `terraform init`, `terraform validate` and
-`terraform plan` all succeed against it. The workspace now manages real
-cluster resources — the `homestreamlab` Namespace and ResourceQuota, created
-by a real, reviewed `terraform apply` and verified live with `kubectl` — see
-the runbook's
+`terraform plan` all succeed against it. The workspace manages real cluster
+resources — the `homestreamlab` Namespace and ResourceQuota, created by a real,
+reviewed `terraform apply` and verified live with `kubectl` — see the runbook's
 [`homestreamlab` namespace instantiation](./docs/terraform-runbook.md#homestreamlab-namespace-instantiation-issue-8)
-section for the exact evidence.
+section for the exact evidence. The HomeStreamLab **deployment identity** (issue
+#31 — `homestreamlab-deployer` ServiceAccount + least-privilege RBAC) is
+implemented and passes repo-local validation; its live `plan`/`apply` and RBAC
+verification are pending — see
+[`docs/homestreamlab-deployer-runbook.md`](./docs/homestreamlab-deployer-runbook.md#verification-status).
 
 ## Backup
 
@@ -297,6 +313,9 @@ for the exact evidence and boundaries.
     operations, verification, and rollback
   - [`docs/terraform-runbook.md`](./docs/terraform-runbook.md) — HCP workspace
     setup, kubeconfig handling, validation, verification, and rollback
+  - [`docs/homestreamlab-deployer-runbook.md`](./docs/homestreamlab-deployer-runbook.md) —
+    the HomeStreamLab deployment identity: RBAC rationale, verification matrix,
+    and the operator credential/kubeconfig handoff for `local-jenkins-platform`
   - [`docs/backup-runbook.md`](./docs/backup-runbook.md) — backup/restore
     usage, safety model, permissions, retention, and verified evidence
   - `docs/adr/` — architecture decision records
@@ -305,7 +324,9 @@ for the exact evidence and boundaries.
   and their tests
 - `registry/` — local Docker registry: `docker-compose.yml` and `smoke-test.sh`
 - `terraform/platform/` — the Platform's HCP-backed Terraform root module;
-  instantiates the Namespace Pattern module once, for `homestreamlab`
+  instantiates the Namespace Pattern module once for `homestreamlab`
+  (`main.tf`) and declares HomeStreamLab's deployment identity + RBAC
+  (`homestreamlab-deployer.tf`)
 - `terraform/modules/namespace-resourcequota/` — the reusable Namespace
   Pattern child module (`Namespace` + matching `ResourceQuota`), with its own
   repo-local throwaway-plan verification (`plan-check.sh`)
