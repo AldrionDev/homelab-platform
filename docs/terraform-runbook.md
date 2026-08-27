@@ -103,6 +103,7 @@ for the full record.
 | File | Role |
 | --- | --- |
 | `main.tf` | instantiates the Namespace Pattern module once, as `module "homestreamlab"` — see [`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8) |
+| `homestreamlab-deployer.tf` | the HomeStreamLab deployment identity — `ServiceAccount` + namespace-scoped `Role`/`RoleBinding` + one narrow `get Namespace/homestreamlab` `ClusterRole`/`ClusterRoleBinding` — see [HomeStreamLab deployment identity](#homestreamlab-deployment-identity-issue-31) and [`docs/homestreamlab-deployer-runbook.md`](./homestreamlab-deployer-runbook.md) |
 | `versions.tf` | `required_version`, the `cloud` block, provider constraints |
 | `providers.tf` | `kubernetes` and `helm` provider configuration |
 | `variables.tf` | `kubeconfig_path` (required), `kube_context` (defaults to `default`) |
@@ -520,6 +521,79 @@ the namespace, from its own separate repository):**
 
 Do not run a broad `terraform destroy` as a routine rollback in either case.
 
+## HomeStreamLab deployment identity (issue #31)
+
+`terraform/platform/homestreamlab-deployer.tf` adds a platform-owned Kubernetes
+**deployment identity** for HomeStreamLab, so a future `local-jenkins-platform`
+J6 credential (`k3s-homestreamlab`) can deploy HomeStreamLab without the host
+administrator kubeconfig. The full operator procedure — permission rationale, the
+approved cluster-scoped exception, the RBAC verification matrix, and the
+credential/kubeconfig handoff — lives in
+[`docs/homestreamlab-deployer-runbook.md`](./homestreamlab-deployer-runbook.md).
+This section covers only how it fits the platform Terraform workspace.
+
+**What it manages** (five resources, all in the `homelab-platform` workspace):
+
+- `kubernetes_service_account_v1.homestreamlab_deployer` — `homestreamlab-deployer`
+  in the `homestreamlab` namespace, `automount_service_account_token = false`;
+- `kubernetes_role_v1` / `kubernetes_role_binding_v1` `homestreamlab-deployer` —
+  namespace-scoped, `get,create,patch,delete` on `secrets` and
+  `persistentvolumeclaims` only (the exact CRUD lifecycle the
+  `hashicorp/kubernetes` `3.2.1` provider performs for HomeStreamLab's current
+  `kubernetes_secret_v1` and `kubernetes_persistent_volume_claim_v1` resources —
+  no `update`, no `list`, no `watch`);
+- `kubernetes_cluster_role_v1` / `kubernetes_cluster_role_binding_v1`
+  `homestreamlab-deployer-namespace-read` — the one narrow, operator-approved
+  exception: `get` on `namespaces` restricted by `resourceNames` to
+  `homestreamlab`, required because HomeStreamLab's Terraform reads the
+  cluster-scoped `Namespace/homestreamlab` via a data source.
+
+The `homestreamlab` Namespace/ResourceQuota (`module.homestreamlab`, issue #8)
+are **not** touched — the namespace name is consumed only via that module's
+`namespace_name` output. No new provider is introduced, so `.terraform.lock.hcl`
+does not change. Terraform manages **no** token, `Secret`, or kubeconfig; that
+material is operator-issued after apply and must never enter state, variables,
+outputs, or Git.
+
+### Apply workflow
+
+Same gated flow as
+[the namespace instantiation above](#workflow-followed): repo-local
+`validate.sh` → confirm Execution Mode Local → `init` (lock unchanged) →
+`plan -out` to a scratch dir outside the repo → `terraform show -json` + `jq`
+gate → separate explicit apply approval → `apply` the exact saved plan → RBAC
+verification matrix → convergence plan.
+
+**Plan gate** — filter `["no-op"]` before counting (a real plan against the
+populated HCP state lists the existing `module.homestreamlab.*` resources as
+no-op):
+
+- `CHANGING = [ .resource_changes[] | select(.change.actions != ["no-op"]) ]`;
+- `CHANGING | length == 5`, every entry `.change.actions == ["create"]`;
+- the five `CHANGING` addresses are exactly the SA, Role, RoleBinding,
+  ClusterRole, ClusterRoleBinding above;
+- no `module.homestreamlab.*` entry has a create/update/delete/replace action
+  (an entry present as `["no-op"]` is expected and fine);
+- the SA shows `automount_service_account_token == false`; the Role rules are
+  `secrets`/`persistentvolumeclaims` × `[get,create,patch,delete]` only; the
+  ClusterRole rule is `namespaces` + `resource_names ["homestreamlab"]` +
+  `verbs ["get"]`; no wildcard `*` anywhere.
+
+**Convergence** — the authoritative machine check is that a follow-up
+`terraform plan`'s JSON has **zero** `resource_changes` with
+`.change.actions != ["no-op"]`; the human `No changes.` line is supporting
+evidence only.
+
+### Rollback
+
+Revert `terraform/platform/homestreamlab-deployer.tf`, run a full (untargeted)
+`terraform plan`, and fail closed unless the JSON shows **exactly** the five
+deletes and **zero** other non-`no-op` changes, under a separate explicit apply
+approval. The Namespace/ResourceQuota are unaffected. The operator-created
+`homestreamlab-deployer-token` Secret is not Terraform-managed — delete it
+separately (`kubectl delete secret homestreamlab-deployer-token -n homestreamlab
+--ignore-not-found`).
+
 ## Verifying against HCP Terraform
 
 This sequence has been run against the live `homelab-platform` workspace with
@@ -574,7 +648,8 @@ git ls-files --others --exclude-standard
 git status --ignored --short -- terraform/
 ```
 
-Stage explicit paths only — never `git add -A`:
+Stage explicit paths only — never `git add -A`. The exact set is per-issue; the
+list below is the one used to bootstrap the workspace (issue #6/#8):
 
 ```sh
 git add terraform/platform/main.tf terraform/platform/versions.tf \
@@ -585,6 +660,17 @@ git add terraform/platform/main.tf terraform/platform/versions.tf \
         .gitignore .env.example README.md CLAUDE.md
 git rm terraform/platform/.gitkeep
 ```
+
+The HomeStreamLab deployment identity (issue #31) stages instead:
+
+```sh
+git add terraform/platform/homestreamlab-deployer.tf \
+        docs/homestreamlab-deployer-runbook.md \
+        docs/terraform-runbook.md README.md CLAUDE.md
+```
+
+`.terraform.lock.hcl` is **not** in that set — issue #31 introduces no new
+provider.
 
 `git rm` removes the file from both the index and the working tree; `git rm
 --cached` would leave a stale untracked `.gitkeep` behind.
@@ -676,13 +762,16 @@ bash terraform/platform/validate.sh
 bash terraform/modules/namespace-resourcequota/plan-check.sh
 ```
 
-There are no unit tests for the root module: it declares no resources and no
-logic, so the meaningful behavioural checks are formatting, configuration
-validity, the provider lock, and the leak gate — which is exactly what
-`validate.sh` runs (now also covering every `terraform/modules/*/` child
-module, including `namespace-resourcequota`). The live `terraform init` and
-empty `terraform plan` against HCP Terraform are covered under
-[Verifying against HCP Terraform](#verifying-against-hcp-terraform).
+The root module's checks are formatting, configuration validity, the provider
+lock, and the leak gate — which is exactly what `validate.sh` runs (also
+covering every `terraform/modules/*/` child module, including
+`namespace-resourcequota`). The root module's resources — the `homestreamlab`
+namespace instantiation (issue #8) and the HomeStreamLab deployment identity
+(issue #31) — have no throwaway `plan-check.sh`; they are verified by the gated
+live `plan`/`apply` against HCP Terraform, JSON-asserted with `jq`. See
+[HomeStreamLab deployment identity](#homestreamlab-deployment-identity-issue-31),
+[`docs/homestreamlab-deployer-runbook.md`](./homestreamlab-deployer-runbook.md),
+and [Verifying against HCP Terraform](#verifying-against-hcp-terraform).
 
 The `namespace-resourcequota` module does declare real resources, so it has
 its own behavioural check: `plan-check.sh`, asserting the exact expected plan
