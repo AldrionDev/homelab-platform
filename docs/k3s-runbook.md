@@ -296,6 +296,33 @@ schema can carry `configs.<registry>.auth` credentials, and k3s reads it as
 root — so 0600 costs nothing and protects a future addition by default. This
 deliberately differs from `/etc/docker/daemon.json`, which is 0644.
 
+### Recovery: `registries.yaml` missing
+
+**Symptom.** A Pod that pulls from `<HOST_LAN_IP>:5000/...` fails with
+
+```
+http: server gave HTTP response to HTTPS client
+```
+
+while `curl http://<HOST_LAN_IP>:5000/v2/` from the host is healthy and the
+Docker daemon still pushes and pulls fine.
+
+**Cause.** `/etc/rancher/k3s/registries.yaml` is absent, so k3s generated no
+`certs.d/<HOST_LAN_IP>:5000/hosts.toml` and containerd falls back to its default
+of treating every non-loopback registry as HTTPS. This is a k3s/containerd
+concern only — the Docker daemon trust in `/etc/docker/daemon.json` is a
+separate mechanism and is unaffected. The file can go missing without a reboot
+(for example a k3s reset/reinstall wipes `/etc/rancher/k3s`, and
+[rollback B](#b-removing-a-configuration-the-setup-transaction-created) removes
+it deliberately); its disappearance is not always explained.
+
+**Recovery.** Re-run the [Setup transaction](#setup-transaction). With the file
+absent it takes the `absent` branch, recreates it `root:root 0600`, performs the
+mandatory k3s restart, and confirms the regenerated `hosts.toml`. Then run the
+full [verification flow](#verifying-the-registry-trust) — Run A, the separate
+verification restart, the post-restart persistence checks, and a fresh-identity
+Run B — before treating the trust as restored.
+
 ### Setup transaction
 
 **Copy the whole block below and run it as a unit.** It is a single
