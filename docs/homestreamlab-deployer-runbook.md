@@ -24,6 +24,14 @@ ServiceAccount token or kubeconfig has been issued. The RBAC verification matrix
 below is the procedure to run **after** the first apply; its recorded results
 belong in the issue #31 completion report / PR description, not in this file.
 
+The Role/ClusterRole were subsequently **widened** for `services`,
+`deployments` (`apps`), `ingressroutes` (`traefik.io`) and a cluster-scoped
+`list` on `customresourcedefinitions`, to match HomeStreamLab's `infra/` after it
+grew to manage Deployments, Services and a Traefik IngressRoute (its PRs #142 /
+#144 / #145). That widening also passes repo-local validation and is **pending
+the same live `plan`/`apply` + RBAC matrix**; the matrix below already reflects
+the widened contract.
+
 ## What Terraform manages
 
 | Object | Kind | Scope |
@@ -31,7 +39,7 @@ belong in the issue #31 completion report / PR description, not in this file.
 | `homestreamlab-deployer` | `ServiceAccount` | `homestreamlab` namespace, `automount_service_account_token = false` |
 | `homestreamlab-deployer` | `Role` | `homestreamlab` namespace |
 | `homestreamlab-deployer` | `RoleBinding` | `homestreamlab` namespace → binds the SA to the Role |
-| `homestreamlab-deployer-namespace-read` | `ClusterRole` | cluster, `resourceNames: ["homestreamlab"]`, `verbs: ["get"]` on `namespaces` |
+| `homestreamlab-deployer-namespace-read` | `ClusterRole` | cluster; rule 1 — `get` on `namespaces`, `resourceNames: ["homestreamlab"]`; rule 2 — `list` on `customresourcedefinitions` (`apiextensions.k8s.io`) |
 | `homestreamlab-deployer-namespace-read` | `ClusterRoleBinding` | cluster → binds the SA to that ClusterRole |
 
 Terraform does **not** manage: the ServiceAccount token, any `Secret`, or the
@@ -47,7 +55,10 @@ the Namespace or ResourceQuota.
 
 Derived from a read-only inspection of HomeStreamLab's **current** Terraform
 (`infra/`, provider `hashicorp/kubernetes` `3.2.1`, matching this repo's lock),
-cross-checked against the provider source at tag `v3.2.1`.
+cross-checked against the provider source at tag `v3.2.1`. The workload rows
+(`services`, `deployments`, `ingressroutes`) and the `customresourcedefinitions`
+row were added when HomeStreamLab's `infra/` grew to manage Deployments, Services
+and a Traefik IngressRoute (its PRs #142 / #144 / #145).
 
 | HomeStreamLab Terraform | API group / resource | Scope | Provider lifecycle | Granted verbs |
 | --- | --- | --- | --- | --- |
@@ -55,40 +66,70 @@ cross-checked against the provider source at tag `v3.2.1`.
 | `kubernetes_secret_v1.app` | core / `secrets` | `homestreamlab` | `Create()` / `Get()` / `Patch(JSONPatchType)` / `Delete()` | `get, create, patch, delete` |
 | `kubernetes_persistent_volume_claim_v1.postgres_data` | core / `persistentvolumeclaims` | `homestreamlab` | `Create()` / `Get()` / `Patch(JSONPatchType)` / `Delete()` | `get, create, patch, delete` |
 | `kubernetes_persistent_volume_claim_v1.uploads` | core / `persistentvolumeclaims` | `homestreamlab` | same as above | `get, create, patch, delete` |
+| `kubernetes_service_v1.{postgres,backend,frontend}` | core / `services` | `homestreamlab` | `Create()` / `Get()` / `Patch(JSONPatchType)` / `Delete()`; all ClusterIP → no LoadBalancer wait, no `endpoints` / `endpointslices` | `get, create, patch, delete` |
+| `kubernetes_deployment_v1.{postgres,backend,frontend}` | `apps` / `deployments` | `homestreamlab` | `Create()` / `Get()` / `Patch(JSONPatchType)` / `Delete()`; `wait_for_rollout` (default true) polls `Deployments().Get()` only — no pods, replicasets, `deployments/status` or watch | `get, create, patch, delete` |
+| `kubernetes_manifest.ingressroute` | `traefik.io` / `ingressroutes` | `homestreamlab` | Server-Side Apply: `Patch(ApplyPatchType)` for create+update, `Get()` for read, `Delete()` for destroy. SSA that creates an absent object is authorized as `create` + `patch` | `get, create, patch, delete` |
+| `kubernetes_manifest.ingressroute` (schema resolution) | `apiextensions.k8s.io` / `customresourcedefinitions` | cluster | `fetchCRDs` → `Resource(crd).List()` on every plan/read/apply, no fallback if denied | `list` (ClusterRole; cannot be name-restricted) |
 
 Deliberately **not** granted:
 
-- `update` — the provider uses JSON Patch for updates, not `Update()`.
-- `list`, `watch` — no lifecycle path calls them (`wait_until_bound = false` on
-  both PVCs, so no status watch and no `persistentvolumes` / `storageclasses`
-  read).
-- any verb on `deployments`, `services`, `configmaps`, `ingresses` /
-  `ingressroutes`, or any non-core API group — HomeStreamLab manages none of
-  them today. When HomeStreamLab adds application manifests (its own later
-  issues), this Role must be widened by a follow-up `homelab-platform` change,
-  not pre-granted here.
+- `update` — the provider uses JSON Patch (`Patch(JSONPatchType)`) for Secret /
+  PVC / Service / Deployment updates and Server-Side Apply
+  (`Patch(ApplyPatchType)`) for the IngressRoute; no path calls `Update()`.
+- `list`, `watch` on any namespaced workload resource — no lifecycle path calls
+  them. `wait_until_bound = false` on both PVCs (no status watch, no
+  `persistentvolumes` / `storageclasses` read); `wait_for_rollout` polls
+  `Deployments().Get()` only; every Service is ClusterIP (no LoadBalancer wait);
+  `kubernetes_manifest` has no `wait` block.
+- `events` — read by the provider only on a create-time wait *failure*, to
+  enrich the error message; never on a successful plan/apply. Withheld.
+- any verb on `configmaps`, `ingresses` (`networking.k8s.io`), `pods`,
+  `replicasets`, `endpoints`, `endpointslices`, `persistentvolumes`,
+  `storageclasses`, `resourcequotas`, `serviceaccounts`, or `nodes`.
+- any **write** on `customresourcedefinitions`, and any `apiextensions.k8s.io`
+  verb other than the single `list` (below). CRDs stay platform-owned.
 - any wildcard (`*`) group/resource/verb.
-- any cluster-scoped write, node access, or namespace `list`/`watch`.
+- any cluster-scoped write, `kube-system` access, RBAC-object write, or
+  namespace `list` / `watch`.
 
-### The cluster-scoped exception (RBAC_SCOPE_REVIEW_REQUIRED)
+### The cluster-scoped reads (RBAC_SCOPE_REVIEW_REQUIRED)
 
-HomeStreamLab's `data "kubernetes_namespace_v1" "homestreamlab"` reads the
-cluster-scoped object `Namespace/homestreamlab`. A namespaced `Role` cannot grant
-that, so this identity needs a `ClusterRole`. This was flagged as
-`RBAC_SCOPE_REVIEW_REQUIRED` and **explicitly approved** as the narrowest
-possible grant:
+Two cluster-scoped **reads** are unavoidable — a namespaced `Role` cannot grant
+either. Both were flagged `RBAC_SCOPE_REVIEW_REQUIRED` and **explicitly approved**
+as the narrowest grants that satisfy the provider, bound to only the
+`homestreamlab-deployer` ServiceAccount. Neither grants any write.
 
-```text
-apiGroups:     [""]
-resources:     ["namespaces"]
-resourceNames: ["homestreamlab"]
-verbs:         ["get"]
-```
+1. HomeStreamLab's `data "kubernetes_namespace_v1" "homestreamlab"` reads the
+   cluster-scoped object `Namespace/homestreamlab`:
 
-bound to only the `homestreamlab-deployer` ServiceAccount. It does not permit
-`list` or `watch` on namespaces, does not permit `get` on any other namespace,
-and grants no cluster-scoped write. Repository conventions do not require an ADR
-for an issue-scoped RBAC exception; this section is its record.
+   ```text
+   apiGroups:     [""]
+   resources:     ["namespaces"]
+   resourceNames: ["homestreamlab"]
+   verbs:         ["get"]
+   ```
+
+   No `list` / `watch` on namespaces, no `get` on any other namespace.
+
+2. `hashicorp/kubernetes` `v3.2.1` `kubernetes_manifest` (the Traefik
+   IngressRoute) unconditionally **lists every CRD in the cluster** during
+   schema/type resolution on every plan, read and apply
+   (`manifest/provider/resource.go`: `fetchCRDs`), and fails the operation with
+   no fallback if that `list` is denied:
+
+   ```text
+   apiGroups: ["apiextensions.k8s.io"]
+   resources: ["customresourcedefinitions"]
+   verbs:     ["list"]
+   ```
+
+   The RBAC `list` verb ignores `resourceNames`, so this cannot be
+   name-restricted. Read-only: no `get` past the `list`, no `watch`, no CRD
+   write, no other `apiextensions.k8s.io` verb. This identity never creates,
+   updates or deletes a CRD.
+
+Repository conventions do not require an ADR for an issue-scoped RBAC exception;
+this section is its record.
 
 ## Apply workflow
 
@@ -109,19 +150,30 @@ as the runbook's
    plan JSON can list unchanged resources as `["no-op"]`, so filter before
    counting:
    - `CHANGING = [ .resource_changes[] | select(.change.actions != ["no-op"]) ]`;
-   - `CHANGING | length == 5`, every entry `.change.actions == ["create"]`;
-   - `CHANGING` addresses are exactly
-     `kubernetes_service_account_v1.homestreamlab_deployer`,
-     `kubernetes_role_v1.homestreamlab_deployer`,
-     `kubernetes_role_binding_v1.homestreamlab_deployer`,
-     `kubernetes_cluster_role_v1.homestreamlab_deployer_namespace_read`,
-     `kubernetes_cluster_role_binding_v1.homestreamlab_deployer_namespace_read`;
+   - `CHANGING` shape depends on whether the identity already exists in the
+     cluster/state:
+     - **first apply** (identity not yet applied): `CHANGING | length == 5`,
+       every entry `.change.actions == ["create"]`, addresses exactly
+       `kubernetes_service_account_v1.homestreamlab_deployer`,
+       `kubernetes_role_v1.homestreamlab_deployer`,
+       `kubernetes_role_binding_v1.homestreamlab_deployer`,
+       `kubernetes_cluster_role_v1.homestreamlab_deployer_namespace_read`,
+       `kubernetes_cluster_role_binding_v1.homestreamlab_deployer_namespace_read`;
+     - **re-apply of the workloads/CRD widening** (identity already applied):
+       `CHANGING | length == 2`, every entry `.change.actions == ["update"]`,
+       addresses exactly `kubernetes_role_v1.homestreamlab_deployer` and
+       `kubernetes_cluster_role_v1.homestreamlab_deployer_namespace_read`;
    - no `module.homestreamlab.*` resource has a non-`no-op` action
      (`[ .resource_changes[] | select(.address | startswith("module.homestreamlab.")) | select(.change.actions != ["no-op"]) ] | length == 0`);
    - the SA's `automount_service_account_token` is `false`;
-   - the Role rules are `secrets` / `persistentvolumeclaims` ×
-     `["get","create","patch","delete"]` only; the ClusterRole rule is
-     `namespaces` + `resource_names ["homestreamlab"]` + `verbs ["get"]`;
+   - the Role has exactly five rules — `secrets` / `persistentvolumeclaims` /
+     `services` (core), `deployments` (`apps`), `ingressroutes` (`traefik.io`) —
+     each `["get","create","patch","delete"]` and nothing else (no `update`,
+     `list`, `watch`);
+   - the ClusterRole has exactly two rules — `namespaces` +
+     `resource_names ["homestreamlab"]` + `verbs ["get"]`, and
+     `customresourcedefinitions` (`apiextensions.k8s.io`) + `verbs ["list"]`
+     (no `resource_names`, no other verb);
    - no wildcard `*` anywhere.
 6. Separate, explicit operator approval of the apply.
 7. `terraform -chdir=terraform/platform apply "$SCRATCH/hsl-deployer.tfplan"` —
@@ -144,15 +196,28 @@ AS='--as=system:serviceaccount:homestreamlab:homestreamlab-deployer'
 ### Positive — every check must print `yes`
 
 ```sh
-kubectl auth can-i get    secrets                -n homestreamlab $AS
-kubectl auth can-i create secrets                -n homestreamlab $AS
-kubectl auth can-i patch  secrets                -n homestreamlab $AS
-kubectl auth can-i delete secrets                -n homestreamlab $AS
-kubectl auth can-i get    persistentvolumeclaims -n homestreamlab $AS
-kubectl auth can-i create persistentvolumeclaims -n homestreamlab $AS
-kubectl auth can-i patch  persistentvolumeclaims -n homestreamlab $AS
-kubectl auth can-i delete persistentvolumeclaims -n homestreamlab $AS
-kubectl auth can-i get    namespace homestreamlab                 $AS
+kubectl auth can-i get    secrets                  -n homestreamlab $AS
+kubectl auth can-i create secrets                  -n homestreamlab $AS
+kubectl auth can-i patch  secrets                  -n homestreamlab $AS
+kubectl auth can-i delete secrets                  -n homestreamlab $AS
+kubectl auth can-i get    persistentvolumeclaims   -n homestreamlab $AS
+kubectl auth can-i create persistentvolumeclaims   -n homestreamlab $AS
+kubectl auth can-i patch  persistentvolumeclaims   -n homestreamlab $AS
+kubectl auth can-i delete persistentvolumeclaims   -n homestreamlab $AS
+kubectl auth can-i get    services                 -n homestreamlab $AS
+kubectl auth can-i create services                 -n homestreamlab $AS
+kubectl auth can-i patch  services                 -n homestreamlab $AS
+kubectl auth can-i delete services                 -n homestreamlab $AS
+kubectl auth can-i get    deployments.apps         -n homestreamlab $AS
+kubectl auth can-i create deployments.apps         -n homestreamlab $AS
+kubectl auth can-i patch  deployments.apps         -n homestreamlab $AS
+kubectl auth can-i delete deployments.apps         -n homestreamlab $AS
+kubectl auth can-i get    ingressroutes.traefik.io -n homestreamlab $AS
+kubectl auth can-i create ingressroutes.traefik.io -n homestreamlab $AS
+kubectl auth can-i patch  ingressroutes.traefik.io -n homestreamlab $AS
+kubectl auth can-i delete ingressroutes.traefik.io -n homestreamlab $AS
+kubectl auth can-i get    namespace homestreamlab                   $AS
+kubectl auth can-i list   customresourcedefinitions.apiextensions.k8s.io    $AS
 ```
 
 ### Negative — every check must print `no`
@@ -165,12 +230,24 @@ kubectl auth can-i watch  namespaces                       $AS
 kubectl auth can-i get    namespace kube-system            $AS
 kubectl auth can-i create clusterroles                     $AS
 kubectl auth can-i create clusterrolebindings              $AS
-kubectl auth can-i create deployments -n default           $AS
-kubectl auth can-i create deployments -n homestreamlab     $AS
+kubectl auth can-i create deployments.apps -n default      $AS
 kubectl auth can-i get    secrets     -n default           $AS
 kubectl auth can-i list   secrets     -n homestreamlab     $AS
 kubectl auth can-i update secrets     -n homestreamlab     $AS
 kubectl auth can-i watch  secrets     -n homestreamlab     $AS
+kubectl auth can-i update deployments.apps         -n homestreamlab $AS
+kubectl auth can-i list   deployments.apps         -n homestreamlab $AS
+kubectl auth can-i watch  deployments.apps         -n homestreamlab $AS
+kubectl auth can-i update services                 -n homestreamlab $AS
+kubectl auth can-i list   services                 -n homestreamlab $AS
+kubectl auth can-i update ingressroutes.traefik.io -n homestreamlab $AS
+kubectl auth can-i list   ingressroutes.traefik.io -n homestreamlab $AS
+kubectl auth can-i get    customresourcedefinitions.apiextensions.k8s.io    $AS
+kubectl auth can-i watch  customresourcedefinitions.apiextensions.k8s.io    $AS
+kubectl auth can-i create customresourcedefinitions.apiextensions.k8s.io    $AS
+kubectl auth can-i list   pods           -n homestreamlab $AS
+kubectl auth can-i get    endpoints      -n homestreamlab $AS
+kubectl auth can-i get    resourcequotas -n homestreamlab $AS
 kubectl auth can-i delete namespace homestreamlab          $AS
 ```
 
@@ -309,6 +386,13 @@ a full (untargeted) `terraform plan`; require the plan JSON to show **exactly**
 five deletes (the five objects above) and **zero** other non-`no-op` changes,
 under a separate explicit apply approval. The `homestreamlab` Namespace and
 ResourceQuota are untouched by this.
+
+To roll back **only** the workloads/CRD widening (keeping the identity), revert
+just the added rules: the plan JSON must then show exactly
+`kubernetes_role_v1.homestreamlab_deployer` and
+`kubernetes_cluster_role_v1.homestreamlab_deployer_namespace_read` as `update`
+(Role back to `secrets` / `persistentvolumeclaims`, ClusterRole back to the
+single `namespaces` rule) and zero other non-`no-op` changes.
 
 Operator side — the token Secret is not Terraform-managed, so delete it
 separately:

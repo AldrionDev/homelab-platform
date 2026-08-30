@@ -31,8 +31,10 @@ This root module now instantiates that pattern once, for HomeStreamLab: a
 apply` against this host's cluster and verified live — see
 [`docs/terraform-runbook.md`](./docs/terraform-runbook.md#homestreamlab-namespace-instantiation-issue-8).
 It also manages HomeStreamLab's **deployment identity** (issue #31): a
-`homestreamlab-deployer` ServiceAccount plus a least-privilege
-Role/RoleBinding and one narrow `get Namespace/homestreamlab` ClusterRole, so a
+`homestreamlab-deployer` ServiceAccount plus a least-privilege Role/RoleBinding
+(`get,create,patch,delete` on `secrets`, `persistentvolumeclaims`, `services`,
+`deployments`, `ingressroutes`) and a ClusterRole with two cluster-scoped reads
+(`get Namespace/homestreamlab`, `list customresourcedefinitions`), so a
 future `local-jenkins-platform` job can deploy HomeStreamLab without the host
 administrator kubeconfig — see
 [`docs/homestreamlab-deployer-runbook.md`](./docs/homestreamlab-deployer-runbook.md).
@@ -216,7 +218,10 @@ once, in `terraform/platform/main.tf`, reserving the `homestreamlab`
 Namespace and a matching ResourceQuota; and it declares HomeStreamLab's
 deployment identity in `terraform/platform/homestreamlab-deployer.tf` — a
 `homestreamlab-deployer` ServiceAccount, a least-privilege namespace-scoped
-Role/RoleBinding, and one narrow `get Namespace/homestreamlab` ClusterRole
+Role/RoleBinding (`secrets`, `persistentvolumeclaims`, `services`, `deployments`,
+`ingressroutes`), and a ClusterRole with two cluster-scoped reads
+(`get Namespace/homestreamlab`, `list customresourcedefinitions` — the latter
+required by `kubernetes_manifest` v3.2.1)
 (see [`docs/homestreamlab-deployer-runbook.md`](./docs/homestreamlab-deployer-runbook.md)).
 No HomeStreamLab application resource is declared here — no Deployment, Service,
 Ingress/IngressRoute, application Secret, or Helm release belongs in this
@@ -258,7 +263,9 @@ resources — the `homestreamlab` Namespace and ResourceQuota, created by a real
 reviewed `terraform apply` and verified live with `kubectl` — see the runbook's
 [`homestreamlab` namespace instantiation](./docs/terraform-runbook.md#homestreamlab-namespace-instantiation-issue-8)
 section for the exact evidence. The HomeStreamLab **deployment identity** (issue
-#31 — `homestreamlab-deployer` ServiceAccount + least-privilege RBAC) is
+#31 — `homestreamlab-deployer` ServiceAccount + least-privilege RBAC, since
+widened for `services` / `deployments` / `ingressroutes` and a cluster-scoped
+`list customresourcedefinitions` to match HomeStreamLab's `infra/`) is
 implemented and passes repo-local validation; its live `plan`/`apply` and RBAC
 verification are pending — see
 [`docs/homestreamlab-deployer-runbook.md`](./docs/homestreamlab-deployer-runbook.md#verification-status).
