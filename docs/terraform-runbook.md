@@ -103,7 +103,7 @@ for the full record.
 | File | Role |
 | --- | --- |
 | `main.tf` | instantiates the Namespace Pattern module once, as `module "homestreamlab"` — see [`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8) |
-| `homestreamlab-deployer.tf` | the HomeStreamLab deployment identity — `ServiceAccount` + namespace-scoped `Role`/`RoleBinding` + one narrow `get Namespace/homestreamlab` `ClusterRole`/`ClusterRoleBinding` — see [HomeStreamLab deployment identity](#homestreamlab-deployment-identity-issue-31) and [`docs/homestreamlab-deployer-runbook.md`](./homestreamlab-deployer-runbook.md) |
+| `homestreamlab-deployer.tf` | the HomeStreamLab deployment identity — `ServiceAccount` + namespace-scoped `Role`/`RoleBinding` (`secrets`, `persistentvolumeclaims`, `services`, `deployments`, `ingressroutes`) + a `ClusterRole`/`ClusterRoleBinding` with two cluster-scoped reads (`get Namespace/homestreamlab`, `list customresourcedefinitions`) — see [HomeStreamLab deployment identity](#homestreamlab-deployment-identity-issue-31) and [`docs/homestreamlab-deployer-runbook.md`](./homestreamlab-deployer-runbook.md) |
 | `versions.tf` | `required_version`, the `cloud` block, provider constraints |
 | `providers.tf` | `kubernetes` and `helm` provider configuration |
 | `variables.tf` | `kubeconfig_path` (required), `kube_context` (defaults to `default`) |
@@ -532,21 +532,27 @@ credential/kubeconfig handoff — lives in
 [`docs/homestreamlab-deployer-runbook.md`](./homestreamlab-deployer-runbook.md).
 This section covers only how it fits the platform Terraform workspace.
 
-**What it manages** (five resources, all in the `homelab-platform` workspace):
+**What it manages** (five Terraform resources, all in the `homelab-platform`
+workspace — the count is unchanged; the Role and ClusterRole each carry more
+rules than at issue #31):
 
 - `kubernetes_service_account_v1.homestreamlab_deployer` — `homestreamlab-deployer`
   in the `homestreamlab` namespace, `automount_service_account_token = false`;
 - `kubernetes_role_v1` / `kubernetes_role_binding_v1` `homestreamlab-deployer` —
-  namespace-scoped, `get,create,patch,delete` on `secrets` and
-  `persistentvolumeclaims` only (the exact CRUD lifecycle the
+  namespace-scoped, `get,create,patch,delete` (no `update`, `list` or `watch`) on
+  `secrets`, `persistentvolumeclaims`, `services` (core), `deployments` (`apps`),
+  and `ingressroutes` (`traefik.io`) — the exact CRUD lifecycle the
   `hashicorp/kubernetes` `3.2.1` provider performs for HomeStreamLab's current
-  `kubernetes_secret_v1` and `kubernetes_persistent_volume_claim_v1` resources —
-  no `update`, no `list`, no `watch`);
+  `kubernetes_secret_v1`, `kubernetes_persistent_volume_claim_v1`,
+  `kubernetes_service_v1`, `kubernetes_deployment_v1` and `kubernetes_manifest`
+  (Traefik IngressRoute) resources;
 - `kubernetes_cluster_role_v1` / `kubernetes_cluster_role_binding_v1`
-  `homestreamlab-deployer-namespace-read` — the one narrow, operator-approved
-  exception: `get` on `namespaces` restricted by `resourceNames` to
-  `homestreamlab`, required because HomeStreamLab's Terraform reads the
-  cluster-scoped `Namespace/homestreamlab` via a data source.
+  `homestreamlab-deployer-namespace-read` — two operator-approved cluster-scoped
+  **reads**: `get` on `namespaces` restricted by `resourceNames` to
+  `homestreamlab` (HomeStreamLab reads `Namespace/homestreamlab` via a data
+  source), and `list` on `customresourcedefinitions` (`apiextensions.k8s.io`)
+  because `kubernetes_manifest` v3.2.1 unconditionally lists all CRDs during
+  schema resolution. No cluster-scoped write; no CRD write.
 
 The `homestreamlab` Namespace/ResourceQuota (`module.homestreamlab`, issue #8)
 are **not** touched — the namespace name is consumed only via that module's
@@ -569,15 +575,22 @@ populated HCP state lists the existing `module.homestreamlab.*` resources as
 no-op):
 
 - `CHANGING = [ .resource_changes[] | select(.change.actions != ["no-op"]) ]`;
-- `CHANGING | length == 5`, every entry `.change.actions == ["create"]`;
-- the five `CHANGING` addresses are exactly the SA, Role, RoleBinding,
+- if the identity is not yet applied: `CHANGING | length == 5`, every entry
+  `.change.actions == ["create"]`, addresses exactly the SA, Role, RoleBinding,
   ClusterRole, ClusterRoleBinding above;
+- if the identity already exists and this is the workloads/CRD widening:
+  `CHANGING | length == 2`, every entry `.change.actions == ["update"]`,
+  addresses exactly `kubernetes_role_v1.homestreamlab_deployer` and
+  `kubernetes_cluster_role_v1.homestreamlab_deployer_namespace_read`;
 - no `module.homestreamlab.*` entry has a create/update/delete/replace action
   (an entry present as `["no-op"]` is expected and fine);
-- the SA shows `automount_service_account_token == false`; the Role rules are
-  `secrets`/`persistentvolumeclaims` × `[get,create,patch,delete]` only; the
-  ClusterRole rule is `namespaces` + `resource_names ["homestreamlab"]` +
-  `verbs ["get"]`; no wildcard `*` anywhere.
+- the SA shows `automount_service_account_token == false`; the Role has exactly
+  five rules — `secrets` / `persistentvolumeclaims` / `services` (core),
+  `deployments` (`apps`), `ingressroutes` (`traefik.io`) — each
+  `[get,create,patch,delete]` and nothing else; the ClusterRole has exactly two
+  rules — `namespaces` + `resource_names ["homestreamlab"]` + `verbs ["get"]`,
+  and `customresourcedefinitions` (`apiextensions.k8s.io`) + `verbs ["list"]`;
+  no wildcard `*` anywhere.
 
 **Convergence** — the authoritative machine check is that a follow-up
 `terraform plan`'s JSON has **zero** `resource_changes` with
@@ -589,7 +602,11 @@ evidence only.
 Revert `terraform/platform/homestreamlab-deployer.tf`, run a full (untargeted)
 `terraform plan`, and fail closed unless the JSON shows **exactly** the five
 deletes and **zero** other non-`no-op` changes, under a separate explicit apply
-approval. The Namespace/ResourceQuota are unaffected. The operator-created
+approval. To roll back only the workloads/CRD widening, revert just the added
+rules and require the JSON to show exactly
+`kubernetes_role_v1.homestreamlab_deployer` and
+`kubernetes_cluster_role_v1.homestreamlab_deployer_namespace_read` as `update`
+and nothing else. The Namespace/ResourceQuota are unaffected. The operator-created
 `homestreamlab-deployer-token` Secret is not Terraform-managed — delete it
 separately (`kubectl delete secret homestreamlab-deployer-token -n homestreamlab
 --ignore-not-found`).

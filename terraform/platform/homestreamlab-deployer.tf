@@ -24,10 +24,25 @@
 #                                        Create()/Get()/Patch(JSONPatchType)/Delete()
 #                                        (wait_until_bound = false on both HSL PVCs,
 #                                        so no watch/list on PVCs or PVs)
+#   kubernetes_service_v1                 Create()/Get()/Patch(JSONPatchType)/Delete()
+#                                        (all HSL Services are ClusterIP, so the
+#                                        LoadBalancer wait never runs; endpoints /
+#                                        endpointslices are never touched)
+#   kubernetes_deployment_v1             Create()/Get()/Patch(JSONPatchType)/Delete()
+#                                        wait_for_rollout defaults true and polls
+#                                        Deployments(ns).Get() only -- no pods,
+#                                        replicasets, watch, or deployments/status
+#   kubernetes_manifest                  Apply  -> dynamic Patch(ApplyPatchType)
+#     (Traefik IngressRoute,             Read   -> dynamic Get()
+#      traefik.io/v1alpha1)              Delete -> dynamic Delete()
+#                                        Server-Side Apply that creates an absent
+#                                        object is authorized as create + patch.
 #   data.kubernetes_namespace_v1         Read -> Namespaces().Get(name)  [cluster-scoped]
 #
 # => namespaced verbs: get, create, patch, delete   (no update, no list, no watch)
-# => one narrow cluster-scoped exception: get on Namespace/homestreamlab only.
+# => cluster-scoped, read only (see the ClusterRole below):
+#      - get  on Namespace/homestreamlab               (name-restricted)
+#      - list on customresourcedefinitions             (kubernetes_manifest)
 
 resource "kubernetes_service_account_v1" "homestreamlab_deployer" {
   metadata {
@@ -57,6 +72,24 @@ resource "kubernetes_role_v1" "homestreamlab_deployer" {
     resources  = ["persistentvolumeclaims"]
     verbs      = ["get", "create", "patch", "delete"]
   }
+
+  rule {
+    api_groups = [""]
+    resources  = ["services"]
+    verbs      = ["get", "create", "patch", "delete"]
+  }
+
+  rule {
+    api_groups = ["apps"]
+    resources  = ["deployments"]
+    verbs      = ["get", "create", "patch", "delete"]
+  }
+
+  rule {
+    api_groups = ["traefik.io"]
+    resources  = ["ingressroutes"]
+    verbs      = ["get", "create", "patch", "delete"]
+  }
 }
 
 resource "kubernetes_role_binding_v1" "homestreamlab_deployer" {
@@ -78,18 +111,29 @@ resource "kubernetes_role_binding_v1" "homestreamlab_deployer" {
   }
 }
 
-# --- Narrow cluster-scoped exception (RBAC_SCOPE_REVIEW_REQUIRED, approved) -----
+# --- Cluster-scoped reads (RBAC_SCOPE_REVIEW_REQUIRED, approved) ----------------
 #
-# HomeStreamLab's current Terraform reads the cluster-scoped object
-# Namespace/homestreamlab via `data "kubernetes_namespace_v1" "homestreamlab"`.
-# A namespaced Role cannot grant access to a cluster-scoped resource, so this
-# ClusterRole is required for HomeStreamLab's Terraform to plan/apply as this
-# identity.
+# HomeStreamLab's Terraform needs two cluster-scoped reads to plan/apply as this
+# identity. Both are read-only; a namespaced Role cannot grant either. There is
+# no cluster-scoped write, no `watch`, and no access beyond what is listed.
 #
-# It is the narrowest grant that satisfies that need: `get` only, restricted by
-# resourceNames to the single `homestreamlab` namespace, bound to exactly one
-# subject. It grants no `list`, no `watch`, no access to any other namespace, and
-# no cluster-scoped write of any kind. Operator-approved for this reason; see
+# 1. get on Namespace/homestreamlab. `data "kubernetes_namespace_v1"
+#    "homestreamlab"` reads the cluster-scoped Namespace object. Restricted by
+#    resourceNames to the single `homestreamlab` namespace -- no `list`, no
+#    `watch`, no `get` on any other namespace.
+#
+# 2. list on customresourcedefinitions.apiextensions.k8s.io. The
+#    hashicorp/kubernetes v3.2.1 `kubernetes_manifest` resource (the Traefik
+#    IngressRoute) unconditionally lists every CRD cluster-wide during schema /
+#    type resolution on every plan, read and apply
+#    (manifest/provider/resource.go: fetchCRDs -> RESTMappings +
+#    Resource(crd).List()); a `forbidden` there fails the operation with no
+#    fallback. The RBAC `list` verb ignores resourceNames, so this cannot be
+#    name-restricted. It is a read: no `get` past the list, no `watch`, no CRD
+#    write, no other apiextensions.k8s.io verb.
+#
+# Both grants are bound to exactly the `homestreamlab-deployer` ServiceAccount
+# via the ClusterRoleBinding below. Operator-approved; see
 # docs/homestreamlab-deployer-runbook.md.
 
 resource "kubernetes_cluster_role_v1" "homestreamlab_deployer_namespace_read" {
@@ -102,6 +146,12 @@ resource "kubernetes_cluster_role_v1" "homestreamlab_deployer_namespace_read" {
     resources      = ["namespaces"]
     resource_names = ["homestreamlab"]
     verbs          = ["get"]
+  }
+
+  rule {
+    api_groups = ["apiextensions.k8s.io"]
+    resources  = ["customresourcedefinitions"]
+    verbs      = ["list"]
   }
 }
 

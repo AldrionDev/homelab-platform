@@ -168,19 +168,25 @@ Implemented and verified:
   `kubernetes_service_account_v1.homestreamlab_deployer` (`homestreamlab-deployer`
   in the existing `homestreamlab` namespace, `automount_service_account_token =
   false`); a namespace-scoped `kubernetes_role_v1` + `kubernetes_role_binding_v1`
-  `homestreamlab-deployer` granting `["get","create","patch","delete"]` on
-  `secrets` and `persistentvolumeclaims` only (the exact CRUD lifecycle
+  `homestreamlab-deployer` granting `["get","create","patch","delete"]` (no
+  `update` — provider uses JSON Patch / Server-Side Apply; no `list`, no `watch`)
+  on `secrets`, `persistentvolumeclaims`, `services` (core), `deployments`
+  (`apps`) and `ingressroutes` (`traefik.io`) — the exact CRUD lifecycle
   `hashicorp/kubernetes` 3.2.1 performs for HomeStreamLab's current
-  `kubernetes_secret_v1` / `kubernetes_persistent_volume_claim_v1` — no `update`
-  (provider uses JSON Patch), no `list`, no `watch`); and one narrow,
-  operator-approved cluster-scoped exception
-  `kubernetes_cluster_role_v1` + `kubernetes_cluster_role_binding_v1`
-  `homestreamlab-deployer-namespace-read` granting `verbs ["get"]` on
-  `namespaces` restricted by `resource_names ["homestreamlab"]` (required because
-  HomeStreamLab's Terraform reads the cluster-scoped `Namespace/homestreamlab`
-  via `data "kubernetes_namespace_v1"`). Bound to the deployer ServiceAccount
-  only. The `homestreamlab` Namespace/ResourceQuota are referenced via
-  `module.homestreamlab.namespace_name` and never recreated. No new provider →
+  `kubernetes_secret_v1`, `kubernetes_persistent_volume_claim_v1`,
+  `kubernetes_service_v1`, `kubernetes_deployment_v1` and `kubernetes_manifest`
+  (Traefik IngressRoute); and `kubernetes_cluster_role_v1` +
+  `kubernetes_cluster_role_binding_v1`
+  `homestreamlab-deployer-namespace-read` with two operator-approved
+  cluster-scoped **reads**: `verbs ["get"]` on `namespaces` restricted by
+  `resource_names ["homestreamlab"]` (HomeStreamLab reads the cluster-scoped
+  `Namespace/homestreamlab` via `data "kubernetes_namespace_v1"`), and
+  `verbs ["list"]` on `customresourcedefinitions` (`apiextensions.k8s.io`)
+  because `kubernetes_manifest` v3.2.1 unconditionally lists all CRDs during
+  schema resolution and fails with no fallback if denied (`list` ignores
+  `resource_names`). No cluster-scoped write, no CRD write. Bound to the deployer
+  ServiceAccount only. The `homestreamlab` Namespace/ResourceQuota are referenced
+  via `module.homestreamlab.namespace_name` and never recreated. No new provider →
   `.terraform.lock.hcl` unchanged. Terraform manages **no** ServiceAccount
   token, `Secret`, or kubeconfig — that material is operator-issued after apply
   and never enters Terraform state/variables/outputs or Git; the credential and
