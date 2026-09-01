@@ -76,6 +76,87 @@ Implemented and verified:
   that check as "if convenient," no `ufw` mutation was performed, and none is
   automated by this component. See the runbook's Verification status section
   before claiming more than this.
+- dnsmasq LAN-UFW firewall lifecycle — a **separate**, explicitly-invoked host
+  mutation, `dnsmasq/lan-ufw-lib.sh` + `dnsmasq/lan-ufw-install.sh` +
+  `dnsmasq/lan-ufw-rollback.sh` (tests `dnsmasq/lan-ufw.test.sh`). Does not
+  source `dnsmasq/lib.sh`, never calls `systemctl`, never writes `/etc`, never
+  touches the dnsmasq service lifecycle. Requires `HOST_LAN_IP` (no default),
+  root, `ip`, `ufw` (already active) and `flock`. A single exclusive
+  non-blocking `flock` on `/run/homelab-platform-dnsmasq-lan-ufw.lock` is taken
+  by both install and rollback **before** any UFW state inspection
+  (`ufw_is_active` included) and held through EXIT-trap cleanup. Fail-closed
+  LAN discovery from `HOST_LAN_IP` via `ip`: exact global-scope address on
+  exactly one non-loopback interface, directly-connected (`scope link`) subnet,
+  and that interface must also carry an IPv4 default route (rules out
+  Docker/CNI bridges); `/31` and `/32` rejected, otherwise no minimum-prefix
+  policy. Adds exactly `LAN_SUBNET -> HOST_LAN_IP:53/udp` and `.../tcp` `in on
+  LAN_INTERFACE`, each with a fixed ownership comment
+  (`homelab-platform:dnsmasq-lan-ufw udp/53` / `tcp/53`); never an `Anywhere` /
+  `ufw allow 53` rule. Ownership matching parses validated **plain** `ufw
+  status` snapshots field-by-field (`<ip> 53/<proto> on <iface> ALLOW
+  <subnet>`), tolerating either bare `ALLOW` — the real host's plain-status
+  shape, UFW 0.36.2 — or `ALLOW IN` (numbered style), while still requiring
+  every ownership field + the exact comment; it does not depend on UFW rule
+  numbers. Deterministic `install` / `noop` / `mismatch`
+  classification; exact re-run is a `noop`; foreign / partial / differing DNS
+  firewall or unparseable state is refused. Durable ownership state
+  `/var/lib/homelab-platform/dnsmasq-lan-ufw/state.env` (`root:root 0600`),
+  fixed six-key schema (`PHASE` ∈ {`installing`,`installed`,`rolling_back`},
+  `HOST_LAN_IP`, `LAN_SUBNET`, `LAN_INTERFACE`, `UDP_COMMENT`, `TCP_COMMENT`)
+  — **never** `source`d/`eval`uated, parsed key-by-key, every value revalidated
+  on read, persisted comments must equal the code constants (code constants are
+  the ownership authority), symlink / non-regular state refused, `root:root
+  0700/0600` enforced under root. The shared `/var/lib/homelab-platform/` root
+  is created if absent but **never** removed by this component. PHASE state
+  machine: install writes `installing` before the first rule and flips to
+  `installed` only after full post-mutation verification; **normal rollback
+  requires `installed` + both exact owned rules + no foreign state, then
+  atomically transitions to `rolling_back` before the first delete**;
+  `rolling_back` is a supported, **resumable** recovery phase (a rollback that
+  deleted UDP but failed on TCP is finished correctly by the next invocation —
+  never wedges); `installing` and `rolling_back` are recovery states where
+  rollback removes 0/1/2 provably-owned rules (still refusing foreign / drifted
+  / ambiguous / duplicated) and clears state only once every owned rule is
+  proven absent and the unrelated-rule fingerprint is unchanged. `installed` is
+  not weakened. Every firewall inspection works from an explicitly captured
+  snapshot: `ufw status` must exit 0 AND report `Status: active`, re-captured at
+  each safety boundary — a failed/inactive later read aborts and is never seen
+  as a clean baseline or as zero owned rules. `do_install` arms the EXIT cleanup
+  **before** the first `state.env` write, so a failed initial write removes the
+  component dir this run created, leaves no UFW mutation and no malformed state,
+  and does not wedge a later run. `line_is_dns_rule` flags any non-owned rule
+  whose destination port covers 53 (bare `53`, `53/udp`, `53/tcp`, ranges like
+  `53:60`/`50:53`, comma lists like `53,67`) — not `5353`. Transactional
+  cleanup: first rule added + second fails → the created rule is removed by
+  stable spec (number-independent), removal + unrelated-rules-untouched
+  verified, recovery state cleared; if a clean result can't be proven →
+  `state.env` preserved at `PHASE=installing`/`rolling_back` and `MANUAL
+  RECOVERY REQUIRED` printed with the exact `ufw delete` command(s). All parsed
+  `ufw`/`ip` output and `sort` are pinned to `LC_ALL=C`. Runbook:
+  `docs/dnsmasq-runbook.md` ("LAN DNS firewall access (separate lifecycle)",
+  see its Verification status matrix).
+  **Repository-local:** `bash -n` on all four scripts; `bash
+  dnsmasq/lan-ufw.test.sh` (93 cases, fake `ufw`/`ip`/`flock` rendering the real
+  plain `ufw status` bare-`ALLOW` shape, tmpdir state, no root).
+  **Runtime-verified on this host** (`HOST_LAN_IP=192.168.1.197`, `wlan0`,
+  `192.168.1.0/24`, UFW 0.36.2) — **final host state INSTALLED, not rolled
+  back**: clean pre-apply baseline → first real `lan-ufw-install.sh` (rc=0,
+  exactly the two `192.168.1.0/24 → 192.168.1.197:53/{udp,tcp} on wlan0` rules
+  with ownership comments, `PHASE=installed`) → post-install ownership/state
+  (`root:root` `0700`/`0600`, 1 owned UDP + 1 owned TCP, UFW baseline diff = only
+  those two) → same-state re-run ("No changes made", byte-identical UFW state,
+  `PHASE=installed`) → real `lan-ufw-rollback.sh` (rc=0, both rules deleted,
+  component state removed, UFW returned exactly to the pre-apply baseline) → real
+  reinstall (rc=0, `PHASE=installed`) → final installed verification; dnsmasq
+  wildcard / upstream / normal-resolver checks stayed green throughout.
+  **Repository-local only — NOT run on the host**: interrupted-install recovery,
+  the `PHASE=rolling_back` resume/failure-injection path, `ufw status`
+  snapshot-read failure injection, transactional mutation-failure cleanup, and
+  lock contention beyond the one real-`flock` tmpdir test.
+  **Deferred — NOT verified**: a second physical LAN client resolving
+  `*.homelab.home.arpa` → `192.168.1.197` / a public domain, and browser access
+  to `http://homestreamlab.homelab.home.arpa` from another device (no second
+  device was available). Do not claim more than the above.
 - HCP Terraform remote state with Local execution mode — the Platform Terraform
   Workspace, `terraform/platform/` (`versions.tf` pins
   `required_version = "~> 1.15"`, a `cloud` block naming the `homelab-platform`

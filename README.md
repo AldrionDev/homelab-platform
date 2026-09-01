@@ -11,9 +11,15 @@ deployed onto this platform from their own separate repositories.
 ## Status
 
 **Bootstrapping.** Single-node k3s, the local Docker registry, k3s registry trust,
-and dnsmasq wildcard DNS are implemented and verified on a real host. dnsmasq's
-LAN-device resolution from a second physical device is not yet exercised, since it
-needs a separate `ufw` change — see
+and dnsmasq wildcard DNS are implemented and verified on a real host. The standalone
+`dnsmasq/lan-ufw-install.sh` / `-rollback.sh` lifecycle that opens LAN-scoped DNS
+through `ufw` has now been **runtime-verified on the host** (clean install →
+ownership/state checks → same-state no-op → rollback restoring the exact UFW
+baseline → reinstall; final host state **INSTALLED**), with dnsmasq wildcard /
+upstream / normal-resolver regression checks passing. Still **not verified**:
+resolution from a **second physical LAN device** (none was available) and browser
+access to `http://homestreamlab.homelab.home.arpa` from another device; the
+failure-injection / recovery paths remain repository-local-tested only. See
 [`docs/dnsmasq-runbook.md`](./docs/dnsmasq-runbook.md#verification-status).
 
 The Platform Terraform Workspace — HCP Terraform remote state in **Local**
@@ -181,10 +187,16 @@ sudo HOST_LAN_IP=<your-lan-ip> HOMELAB_DOMAIN=<your-domain> bash dnsmasq/smoke-t
 ```
 
 To point another device on the LAN at this resolver, set its DNS server to
-`HOST_LAN_IP`. This host's firewall (`ufw`) currently has no rule admitting port 53,
-so a separate, explicitly-approved firewall change is needed first for LAN devices
-(not for host-local verification, which is unaffected) — see
-[`docs/dnsmasq-runbook.md`](./docs/dnsmasq-runbook.md#lan-device-verification-and-ufw).
+`HOST_LAN_IP`. LAN devices need `ufw` to admit port 53 from the LAN, which is the
+**separate**, explicitly-invoked `dnsmasq/lan-ufw-install.sh` (rolled back with
+`dnsmasq/lan-ufw-rollback.sh`) — a standalone, `flock`-serialised lifecycle that
+opens exactly the derived
+`<LAN_SUBNET> -> <HOST_LAN_IP>:53/udp+tcp on <LAN_INTERFACE>` rules, never an
+`Anywhere` rule, and never touches the dnsmasq service or `/etc`. On this host it
+has been applied and runtime-verified (final state **installed**); resolution from
+a genuinely separate LAN device is still unverified. Host-local verification is
+unaffected and needs no firewall change. See
+[`docs/dnsmasq-runbook.md`](./docs/dnsmasq-runbook.md#lan-dns-firewall-access-separate-lifecycle).
 
 Rolling back fully restores the previous DNS behavior — stops and disables dnsmasq,
 then removes only the files this platform proves it owns:
@@ -199,11 +211,18 @@ domain is `homelab.home.arpa` per RFC 8375 instead.
 
 **Status: verified on a real host** — install, wildcard resolution, public DNS
 forwarding, dnsmasq active/enabled state, rollback, normal host DNS after rollback,
-and reinstall with a final smoke test all passed. **Not exercised: LAN-device
-resolution** from a second physical device, since it needs a separate, explicitly
-approved `ufw` change this component's installer never performs automatically. See
+and reinstall with a final smoke test all passed. The separate LAN-UFW lifecycle
+(`dnsmasq/lan-ufw-install.sh` / `-rollback.sh`) is now **runtime-verified on the
+host** (`HOST_LAN_IP=192.168.1.197`, `wlan0`, `192.168.1.0/24`, UFW 0.36.2): clean
+install, post-install ownership/state (`root:root` `0700`/`0600`, exactly the two
+owned rules), same-state no-op, rollback restoring the exact pre-apply UFW baseline,
+reinstall — **final host state INSTALLED**, dnsmasq/wildcard/upstream regressions
+green. **Deferred / not verified:** second-physical-LAN-client DNS and
+`http://homestreamlab.homelab.home.arpa` browser access from another device.
+**Repository-local only:** the interrupted-install / `rolling_back` / snapshot-read /
+transactional-failure recovery paths. See
 [`docs/dnsmasq-runbook.md`](./docs/dnsmasq-runbook.md#verification-status) for the
-exact boundary.
+full matrix.
 
 ## Terraform (platform workspace)
 
@@ -328,7 +347,8 @@ for the exact evidence and boundaries.
   - `docs/adr/` — architecture decision records
 - `k3s/` — k3s install script and the local-registry pull test
 - `dnsmasq/` — wildcard DNS: `install.sh`, `rollback.sh`, `smoke-test.sh`, `lib.sh`,
-  and their tests
+  and their tests; plus the separate LAN-UFW firewall lifecycle
+  (`lan-ufw-lib.sh`, `lan-ufw-install.sh`, `lan-ufw-rollback.sh`, `lan-ufw.test.sh`)
 - `registry/` — local Docker registry: `docker-compose.yml` and `smoke-test.sh`
 - `terraform/platform/` — the Platform's HCP-backed Terraform root module;
   instantiates the Namespace Pattern module once for `homestreamlab`

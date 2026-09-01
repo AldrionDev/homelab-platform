@@ -70,6 +70,18 @@ Verify:
 sudo HOST_LAN_IP=<your-lan-ip> HOMELAB_DOMAIN=<your-domain> bash dnsmasq/smoke-test.sh
 ```
 
+Host-local verification needs no firewall change. Letting a **separate** LAN device
+use this host as its resolver does: run the standalone, `flock`-serialised
+`dnsmasq/lan-ufw-install.sh` (rolled back with `dnsmasq/lan-ufw-rollback.sh`), which
+opens exactly the derived `<LAN_SUBNET> -> <HOST_LAN_IP>:53/udp+tcp on
+<LAN_INTERFACE>` rules and touches nothing else — see
+[`docs/dnsmasq-runbook.md`](./dnsmasq-runbook.md#lan-dns-firewall-access-separate-lifecycle).
+It is not part of the dnsmasq service lifecycle and is not required for the smoke
+test above. On the reference host this lifecycle has been runtime-verified end to end
+(install → no-op → rollback → reinstall, final state **installed**); resolution from
+a genuinely separate LAN client is not yet verified — see the runbook's
+[Verification status](./dnsmasq-runbook.md#verification-status).
+
 ### 3. local registry
 
 Four sub-steps — registry up, Docker daemon trust, k3s registry trust, then
