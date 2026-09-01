@@ -37,14 +37,33 @@ disturbing normal DNS resolution for anything else.
   installed/active/enabled state, and a second full `dnsmasq/smoke-test.sh` run passed
   with the same checks as the first.
 
-**Not exercised: LAN-device resolution from a second physical device.** This host's
-`ufw` is active with a default-deny inbound policy and currently admits no rule for
-port 53 (see [LAN-device verification and UFW](#lan-device-verification-and-ufw)).
-Issue #5 marks the other-LAN-device check as "if convenient," not required; no `ufw`
-mutation was performed as part of this verification, and `dnsmasq/install.sh` never
-performs one automatically. Do not treat LAN-device resolution as verified until that
-separate, explicitly-approved firewall step is actually taken and re-tested from a
-real second device.
+**LAN DNS firewall access (`dnsmasq/lan-ufw-*.sh`) — runtime-verified on this host,
+final state INSTALLED.** With `HOST_LAN_IP=192.168.1.197`, `LAN_INTERFACE=wlan0`,
+`LAN_SUBNET=192.168.1.0/24` (UFW 0.36.2), the full lifecycle was exercised on the
+real host: a clean pre-apply baseline (no component state, no pre-existing DNS/53
+user rule, dnsmasq healthy), a first `dnsmasq/lan-ufw-install.sh` (rc=0, exactly the
+two `192.168.1.0/24 → 192.168.1.197:53/{udp,tcp} on wlan0` rules with the platform
+ownership comments, `state.env` `PHASE=installed`), post-install ownership/state
+verification (`/var/lib/homelab-platform/dnsmasq-lan-ufw` `root:root 0700`,
+`state.env` `root:root 0600`, exactly one owned UDP + one owned TCP rule, the UFW
+baseline diff containing only those two rules), a same-state re-run ("No changes
+made", byte-identical UFW state, `PHASE=installed` unchanged), a real
+`dnsmasq/lan-ufw-rollback.sh` (rc=0, both owned rules deleted, component state
+removed, UFW state returned exactly to the pre-apply baseline), a real reinstall
+(rc=0, both rules re-added, `PHASE=installed`), and a final installed-state check.
+dnsmasq wildcard resolution (`192.168.1.197`), dnsmasq upstream forwarding, and this
+host's normal resolver stayed healthy throughout. **The final host state is
+INSTALLED, not rolled back.** See
+[LAN DNS firewall access (separate lifecycle)](#lan-dns-firewall-access-separate-lifecycle)
+for the full flow and the exact boundary.
+
+**Not verified — deferred:** a **second physical LAN client** using
+`192.168.1.197` as its resolver (unique `*.homelab.home.arpa` → host, a public
+domain, and `http://homestreamlab.homelab.home.arpa` browser access) — no second
+device was available. **Repository-local only:** every failure-injection path
+(interrupted-install recovery, `PHASE=rolling_back` resume/failure, snapshot-read
+failure, transactional mutation failure, lock contention beyond the tmpdir test).
+`dnsmasq/install.sh` still never touches `ufw` itself.
 
 ## Prerequisites
 
@@ -216,26 +235,201 @@ To point another device on the LAN at this resolver, set its DNS server to
 `HOST_LAN_IP`. This works for any client that queries its configured DNS server as
 ordinary unicast DNS (Windows, Android, most Linux/IoT).
 
-**This host's firewall currently blocks it.** `ufw` is active here with a default-deny
-inbound policy and, as shipped, admits no rule for port 53 — confirmed read-only
-during planning (`ufw status`, `/etc/ufw/user.rules`, `/etc/default/ufw`). Host-local
-verification (`dig @<HOST_LAN_IP> ...` run *on* this host) still works regardless,
-because this host's own traffic to its own LAN address is routed via `lo`
+**This host's firewall blocks it until a LAN-scoped rule is added.** `ufw` is active
+here with a default-deny inbound policy and, as shipped, admits no rule for port 53.
+Host-local verification (`dig @<HOST_LAN_IP> ...` run *on* this host) still works
+regardless, because this host's own traffic to its own LAN address is routed via `lo`
 (`ip route get <HOST_LAN_IP>` shows `dev lo`), which `ufw` always allows — but a query
-from a genuinely separate LAN device will be dropped until a LAN-scoped rule admits
-UDP+TCP 53.
+from a genuinely separate LAN device is dropped until UDP+TCP 53 is admitted from the
+LAN.
 
 `dnsmasq/install.sh` **deliberately never touches `ufw`.** Opening port 53 is a
-separate, explicitly-approved host mutation, scoped to the actual LAN
-interface/subnet at the time it's performed (not assumed in advance) — e.g.:
+separate, explicitly-invoked host mutation with its own ownership state and its own
+lifecycle lock — see the next section.
+
+### LAN DNS firewall access (separate lifecycle)
+
+`dnsmasq/lan-ufw-install.sh` and `dnsmasq/lan-ufw-rollback.sh` are a **standalone**
+lifecycle. They never edit `/etc`, never call `systemctl`, and never touch the
+dnsmasq service or its configuration — the dnsmasq install/rollback contract in the
+rest of this runbook is completely unchanged. They exist solely to add or remove
+exactly two narrowly-scoped UFW rules.
+
+**Why it is separate from `dnsmasq/install.sh`.** Firewall exposure is a distinct
+security decision with a different blast radius, a different approval, and its own
+recoverable state. Coupling it into the dnsmasq service lifecycle would mean every
+`dnsmasq/install.sh` re-run reasoned about firewall state, and every dnsmasq rollback
+risked touching `ufw`. Keeping them apart means each lifecycle stays small and
+independently verifiable.
+
+**Invocation.**
 
 ```sh
-sudo ufw allow in on <lan-iface> to any port 53 proto udp
-sudo ufw allow in on <lan-iface> to any port 53 proto tcp
+sudo HOST_LAN_IP=<your-lan-ip> bash dnsmasq/lan-ufw-install.sh
+sudo bash dnsmasq/lan-ufw-rollback.sh
 ```
 
-Only do this if LAN-device verification is actually wanted — issue #5's acceptance
-criteria mark it "if convenient," not required.
+`HOST_LAN_IP` is the only input and has no default. Rollback takes no configuration —
+it reads the durable ownership descriptor.
+
+**Concurrency.** Both scripts take a single exclusive, non-blocking `flock` on
+`/run/homelab-platform-dnsmasq-lan-ufw.lock` **before** any UFW state is inspected,
+and hold it through completion (including transactional cleanup). A second
+install/rollback started while one is running refuses immediately with no mutation.
+
+**Runtime discovery.** The LAN interface and its directly-connected subnet are
+derived from `HOST_LAN_IP` at run time via `ip` — nothing is hard-coded. Discovery
+fails closed unless **all** of the following hold: the exact IPv4 address exists on
+exactly one interface; that address has global scope; the interface is not a
+loopback; the derived subnet is a directly-connected (`scope link`) route on that
+interface; and that interface also carries an IPv4 default route (so a Docker/CNI
+bridge that merely has a connected route cannot be selected). A `/31` or `/32`
+address is rejected (no usable LAN subnet); there is otherwise **no** minimum-prefix
+policy — a `/8` LAN is accepted.
+
+**Exact security boundary.** The only effective policy this lifecycle can ever
+produce is:
+
+```text
+<LAN_SUBNET> -> <HOST_LAN_IP>:53/udp on <LAN_INTERFACE>
+<LAN_SUBNET> -> <HOST_LAN_IP>:53/tcp on <LAN_INTERFACE>
+```
+
+Each rule carries a fixed platform ownership comment
+(`homelab-platform:dnsmasq-lan-ufw udp/53` / `tcp/53`). It never adds an
+unrestricted `ufw allow 53` / `Anywhere` DNS rule, and it treats **any**
+non-owned UFW rule whose destination port covers 53 as foreign — a bare `53`,
+`53/udp`, `53/tcp`, a range that spans 53 (`53:60/udp`, `50:53/tcp`) or a
+comma list containing 53 (`53,67/udp`) all force `mismatch` / refusal
+(`5353` and other unrelated ports do not).
+
+**Ownership state.** `/var/lib/homelab-platform/dnsmasq-lan-ufw/state.env`
+(`root:root 0600`), a fixed six-key schema
+(`PHASE` ∈ {`installing`, `installed`, `rolling_back`}, `HOST_LAN_IP`,
+`LAN_SUBNET`, `LAN_INTERFACE`, `UDP_COMMENT`, `TCP_COMMENT`).
+It is **never** `source`d or `eval`uated — it is parsed key-by-key, every value is
+revalidated on read, and the persisted comments must exactly equal the code-defined
+ownership constants (the code constants, never the stored text, are the ownership
+authority). A symlinked or non-regular state file/dir is refused; under root the
+component dir/file must be `root:root` `0700`/`0600`. The shared
+`/var/lib/homelab-platform/` root is created if absent but is **never** removed by
+this component.
+
+**PHASE state machine.** `PHASE` is one of `installing`, `installed`, `rolling_back`.
+
+- **install** writes `PHASE=installing` *before* the first firewall mutation, and
+  flips it to `PHASE=installed` only after both rules exist exactly, ownership is
+  proven, no foreign DNS rule is present, and post-mutation verification passes.
+- **normal rollback** requires `PHASE=installed` and **both** exact platform-owned
+  rules present with no foreign state *before* it begins; it then atomically
+  transitions `state.env` to `PHASE=rolling_back` *before* the first delete.
+- `PHASE=rolling_back` is a supported, **resumable** recovery phase. If a delete or a
+  verification fails, `state.env` stays at `PHASE=rolling_back` and re-running
+  `dnsmasq/lan-ufw-rollback.sh` re-enters recovery mode and finishes. So a rollback
+  that deleted UDP but failed on TCP is completed correctly by the next invocation —
+  it never wedges into "can't roll back because both rules aren't present".
+- `PHASE=installing` (interrupted install) and `PHASE=rolling_back` (interrupted
+  rollback) are both **recovery states**: rollback removes whichever of the two owned
+  rules (0, 1 or 2) are provably present, still refusing any foreign / drifted /
+  ambiguous / duplicated rule, and only clears `state.env` once every owned rule is
+  proven absent and the unrelated-rule fingerprint is unchanged. `PHASE=installed`
+  is **not** weakened — it still requires both exact rules before starting.
+- `classify_state` returns `mismatch` for a recorded `installing` or `rolling_back`,
+  pointing the operator at `dnsmasq/lan-ufw-rollback.sh`.
+
+**Fail-closed UFW reads.** Every firewall inspection works from an explicitly
+captured snapshot: `LC_ALL=C ufw status` must exit 0 **and** its first line must be
+`Status: active`, otherwise the operation aborts. A failed or later-inactive
+`ufw status` is never allowed to degrade into "zero rules" — install will not treat
+it as a clean baseline, and rollback/recovery will not treat it as "no owned rules"
+or clear state. Snapshots are re-captured and re-validated at each safety boundary
+(classification, before mutation, after each mutation, final verification).
+
+**Cleanup armed before the first durable write.** `do_install` captures its
+pre-state snapshot, then creates the component state directory, then arms the
+EXIT/INT/TERM cleanup, and only then writes `state.env`. A failed initial state
+write therefore unwinds cleanly: the component directory this run created is
+removed, no UFW mutation has happened, and no malformed state is left to wedge a
+later run. The shared `/var/lib/homelab-platform/` root is still never removed.
+
+**Idempotency.** Re-running `dnsmasq/lan-ufw-install.sh` against the exact applied
+state is a no-op (`classify_state` returns `noop` before any mutation).
+
+**Mismatch / fail-closed.** A pre-existing foreign, partial, or differing DNS
+firewall rule — or an unparseable `state.env`, or an unreadable firewall — is
+refused, never silently adopted or overwritten.
+
+**Transactional cleanup.** If the first rule is added and the second mutation fails,
+the run removes only the exact rule it created (by stable spec, not by UFW number),
+verifies the removal and that unrelated rules are untouched, and clears the recovery
+state. If a clean result cannot be proven, it preserves `state.env` at
+`PHASE=installing`, prints `MANUAL RECOVERY REQUIRED` with the exact outstanding
+`ufw delete` command(s), and exits non-zero. Recovery is then
+`sudo bash dnsmasq/lan-ufw-rollback.sh`.
+
+**Verification (host, after a real apply).**
+
+```sh
+sudo LC_ALL=C ufw status
+```
+
+Expect exactly two rows of the form
+`<HOST_LAN_IP> 53/udp on <LAN_INTERFACE>  ALLOW  <LAN_SUBNET>  # homelab-platform:dnsmasq-lan-ufw udp/53`
+and the `tcp` twin — and every unrelated rule unchanged. Plain `ufw status` on
+this host (UFW 0.36.2) renders the action as bare `ALLOW`; `ufw status numbered`
+renders the same rule as `ALLOW IN`. The ownership matcher accepts either form but
+still requires the exact destination IP, `53/<proto>`, interface, `ALLOW` action
+and source subnet, plus the exact ownership comment.
+
+**LAN-client verification — DEFERRED, not yet performed** (no second physical LAN
+client was available). When one is: from a genuinely separate LAN device configured
+to use `<HOST_LAN_IP>` as its DNS server —
+
+1. Resolve a unique `<marker>.<HOMELAB_DOMAIN>` and confirm it returns `<HOST_LAN_IP>`.
+2. Resolve a normal public domain (proves upstream forwarding still works).
+3. Open `http://homestreamlab.homelab.home.arpa` and confirm the HomeStreamLab
+   frontend responds.
+
+**Rollback.**
+
+```sh
+sudo bash dnsmasq/lan-ufw-rollback.sh
+```
+
+Removes only the two platform-owned rules (by stable spec, so the second delete is
+unaffected by the first renumbering), verifies both are gone and unrelated rules are
+untouched, then clears the component state. Refuses when ownership or expected live
+state cannot be proven.
+
+### Verification status
+
+**Repository-local (all four scripts):** `bash -n`; `bash dnsmasq/lan-ufw.test.sh`
+(93 cases, fake `ufw`/`ip`/`flock`, tmpdir state, no root); `git diff --check`.
+
+**Runtime-verified on this host** — `HOST_LAN_IP=192.168.1.197`,
+`LAN_INTERFACE=wlan0`, `LAN_SUBNET=192.168.1.0/24`, UFW 0.36.2 — **final host state
+INSTALLED**:
+
+| Step | Evidence |
+| --- | --- |
+| Clean pre-apply baseline | no `/var/lib/homelab-platform/dnsmasq-lan-ufw` state; no pre-existing DNS/53 user rule; dnsmasq active+enabled; direct wildcard lookup → `192.168.1.197`; direct public-domain forwarding OK |
+| First real install | `lan-ufw-install.sh` rc=0; exactly two rules added — `192.168.1.0/24 → 192.168.1.197:53/udp on wlan0` and the `tcp` twin — with the exact ownership comments; `state.env` `PHASE=installed` |
+| Post-install ownership/state | component dir `root:root 0700`; `state.env` `root:root 0600`; exactly 1 owned UDP + 1 owned TCP rule; UFW baseline diff = only those two rules added; dnsmasq still active+enabled; wildcard / upstream / normal host DNS all healthy |
+| Runtime idempotency | a second identical install rc=0, "No changes made", no "Rule added" output; owned count still 1 UDP + 1 TCP; `PHASE=installed` unchanged; `ufw` added-rule set byte-identical before/after |
+| Real rollback | `lan-ufw-rollback.sh` rc=0; both owned rules deleted; component state removed; `ufw` added-rule set returned **exactly** to the pre-apply baseline; no owned rule left; dnsmasq active+enabled; wildcard + upstream DNS still OK |
+| Real reinstall | rc=0; both owned rules re-added; `PHASE=installed` |
+| Final installed verification | component dir `root:root 0700`; `state.env` `root:root 0600`; final UFW diff vs the original baseline = exactly the two intended DNS rules; dnsmasq active+enabled; wildcard lookup → `192.168.1.197`; public forwarding OK |
+
+**Repository-local only — NOT exercised on the host:** interrupted-install recovery;
+the `PHASE=rolling_back` resume path and its delete/verify failure injection;
+`ufw status` snapshot-read failure injection; transactional mutation-failure cleanup
+(`MANUAL RECOVERY REQUIRED`); lock contention beyond the single real-`flock`
+tmpdir test.
+
+**Deferred — NOT verified:** a **second physical LAN client** resolving a unique
+`*.homelab.home.arpa` name to `192.168.1.197`, resolving a public domain, and
+reaching `http://homestreamlab.homelab.home.arpa` in a browser — no second physical
+LAN client was available.
 
 ## Changing `HOST_LAN_IP` or `HOMELAB_DOMAIN`
 
@@ -322,8 +516,10 @@ values — rollback leaves exactly the clean baseline `install.sh` requires.
   byte-exact ownership proof `rollback.sh` uses — it never removes a file that no
   longer matches what it just wrote, and if the service can't be proven returned to
   its baseline, cleanup stops and reports manual recovery rather than guessing.
-- No `ufw`/firewall mutation is ever automatic — see
-  [LAN-device verification and UFW](#lan-device-verification-and-ufw).
+- No `ufw`/firewall mutation is ever automatic. `dnsmasq/install.sh` never touches
+  `ufw`; LAN DNS firewall access is the separate, explicitly-invoked lifecycle in
+  [LAN DNS firewall access (separate lifecycle)](#lan-dns-firewall-access-separate-lifecycle),
+  which itself never touches the dnsmasq service or `/etc`.
 - TLS, HTTPS, and application-specific ingress routing are explicitly out of scope for
   this component (issue #5).
 
@@ -333,6 +529,7 @@ values — rollback leaves exactly the clean baseline `install.sh` requires.
 bash dnsmasq/lib.test.sh
 bash dnsmasq/install.test.sh
 bash dnsmasq/rollback.test.sh
+bash dnsmasq/lan-ufw.test.sh
 ```
 
 Plain bash, no framework, no root/systemd/real `/etc` or `/var/lib` required — every
@@ -345,3 +542,39 @@ state); the rendered config and drop-in content, including the additive
 (including the split `enable`/`start` tracking and the case where restoring the
 baseline itself fails); and rollback's ownership proof and ordering, including the
 partial-match and manifest-directory-only-removal cases.
+
+`dnsmasq/lan-ufw.test.sh` (93 cases) covers the separate LAN-UFW lifecycle with fake
+`ufw`/`ip`/`flock` and tmpdir state (no root, no real firewall): input / root /
+command-availability failures; the lock being acquired **before** any UFW inspection;
+concurrent install and install-vs-rollback both refused without mutation (including
+one case driving the real `flock` binary against a tmpdir lock); fail-closed LAN
+discovery (absent / ambiguous address, loopback, non-global scope, connected-but-non-
+default-route bridge, non-connected subnet, `/31` and `/32` rejected while `/8` is
+accepted); `install`/`noop`/`mismatch` classification; hardened `state.env` parsing
+(symlink / non-regular file, missing / duplicate / unknown key, control chars, bad
+`PHASE`, non-canonical subnet, bad interface name, persisted-comment ≠ code constant,
+strict root perms, and a proof the file contents are never executed); the
+transactional install cleanup (UDP added / TCP fails → spec delete + state cleared;
+delete also fails → `MANUAL RECOVERY REQUIRED` with state preserved at
+`PHASE=installing`); **attempt-vs-success reconciliation** — a mutating `ufw allow`
+that applies its rule but then returns non-zero: cleanup still discovers and removes
+the live owned rule(s) by stable spec even though the success flag was never set
+(UDP-applies-then-fails; UDP-applies-then-fails + delete also fails → `MANUAL
+RECOVERY REQUIRED`, `PHASE=installing` kept; TCP-applies-then-fails after UDP
+succeeds → both removed), and the outstanding-delete hint names every *attempted*
+protocol; the cleanup being armed **before** the first `state.env` write
+(injected write failure → component dir removed, no UFW mutation, next clean run not
+wedged); `PHASE=installed` rollback and refusal cases; the `PHASE=rolling_back`
+resumable recovery phase, incl. the regression where a rollback deletes UDP, fails on
+TCP, and a second invocation finishes it; `PHASE=installing` / `PHASE=rolling_back`
+recovery rollback for 0 / 1 / 2 owned rules and its refusals; fail-closed UFW
+snapshots (a later `ufw status` that fails or reports inactive aborts and is never
+seen as a clean baseline or as zero owned rules); foreign port-53 expression
+detection (bare 53, ranges, comma lists — not `5353`); **the real plain `ufw status`
+row shape** (bare `ALLOW`, no `IN` — the shape observed on the host during preflight)
+recognized as owned by `owned_rule_count` / excluded by `list_foreign_dns_rules` and
+the fingerprint / classified `noop` at `PHASE=installed`, plus the same for the
+`ufw status numbered` `ALLOW IN` shape and per-field ownership rejection (wrong
+subnet / iface / ip / proto / action / extra token); the unrelated-rules-untouched
+invariant; that the shared `/var/lib/homelab-platform/` root is never removed; and
+locale-independent parsing.
