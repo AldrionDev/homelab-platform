@@ -641,14 +641,15 @@ Expected:
 
 Historically, the empty baseline (issue #6) and the converged Namespace state
 after issue #8 reported **`No changes. Your infrastructure matches the
-configuration.`** Current source also contains the not-yet-live-applied
-HomeStreamLab deployment identity and HomeOps prerequisites, so a live plan is
-not expected to be empty until those changes are separately approved, applied,
-and converged. Follow
+configuration.`** Issue #38's HomeOps prerequisites were subsequently applied
+from a reviewed saved plan (`10 to add, 0 to change, 0 to destroy`); apply
+reported `10 added, 0 changed, 0 destroyed`, and the post-apply plan reported no
+changes. Current source still contains the not-yet-live-applied HomeStreamLab
+deployment identity, so follow
 [`docs/homestreamlab-deployer-runbook.md`](./homestreamlab-deployer-runbook.md)
-for issue #31 and
+for issue #31. See
 [`docs/homeops-platform-runbook.md`](./homeops-platform-runbook.md) for issue
-#38; never combine their pending changes into one apply.
+#38's completed apply and live verification evidence.
 `kubeconfig_path` still has to be set — it has no default — which is what
 proves the machine-specific value is wired through a variable rather than
 committed.
