@@ -49,11 +49,15 @@ identity/RBAC — no HomeStreamLab application resource exists here or is deploy
 by this repo, and no ServiceAccount token or kubeconfig is Terraform-managed or
 committed.
 
-Issue #38 adds the repo-local HomeOps platform configuration: `module.homeops`
-with its explicit quota, a separate read-only `homeops-observer` runtime
-identity, and a `homeops-deployer` Jenkins identity limited to HomeOps Services,
-Deployments, IngressRoutes, and the two provider-required cluster reads. It is
-not live-planned or applied. See
+Issue #38 adds the HomeOps platform configuration: `module.homeops` with its
+explicit quota, a separate read-only `homeops-observer` runtime identity, and a
+`homeops-deployer` Jenkins identity limited to HomeOps Services, Deployments,
+IngressRoutes, and the two provider-required cluster reads. A reviewed saved
+plan (`10 to add, 0 to change, 0 to destroy`) was applied against the existing
+HCP Terraform `homelab-platform` workspace (`10 added, 0 changed, 0 destroyed`),
+and the post-apply plan reported no changes. The Namespace, quota, both
+ServiceAccounts, and the complete observer/deployer allow and deny RBAC matrices
+were verified live. See
 [`docs/homeops-platform-runbook.md`](./docs/homeops-platform-runbook.md).
 
 The generic local backup and restore mechanism — timestamped `tar.gz`
@@ -277,11 +281,10 @@ export TF_CLOUD_ORGANIZATION=<your-hcp-organization>
 terraform init
 ```
 
-Do not follow this with an ungated generic plan or apply. First converge the
-separately pending HomeStreamLab identity from a revision without issue #38,
-through its own runbook. Then follow
-[`docs/homeops-platform-runbook.md`](./docs/homeops-platform-runbook.md) for
-issue #38's saved-plan JSON gate. Never combine the two issues in one apply.
+Do not follow this with an ungated generic plan or apply. Follow the applicable
+issue-specific runbook and keep unrelated changes out of the saved plan. Issue
+#38's completed gated apply is documented in
+[`docs/homeops-platform-runbook.md`](./docs/homeops-platform-runbook.md).
 
 The workspace name is fixed in `versions.tf` (ADR-0002); only the
 account-specific organization comes from the environment. The kubeconfig path is
@@ -308,8 +311,11 @@ implemented and passes repo-local validation; its live `plan`/`apply` and RBAC
 verification are pending — see
 [`docs/homestreamlab-deployer-runbook.md`](./docs/homestreamlab-deployer-runbook.md#verification-status).
 The HomeOps prerequisites and both separate identities (issue #38) are
-implemented and repository-locally validated, but have not been live planned,
-applied, or RBAC-verified; see
+implemented, applied against the existing HCP workspace, and live-verified in
+Kubernetes, including the quota and both allow/deny RBAC matrices. The
+post-apply plan reported no changes. HomeOps name resolution on this workstation
+uses an operator-managed `/etc/hosts` entry, not wildcard DNS or a
+Terraform-managed record; see
 [`docs/homeops-platform-runbook.md`](./docs/homeops-platform-runbook.md#verification-status).
 
 ## Backup

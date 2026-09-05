@@ -298,14 +298,19 @@ Implemented and verified:
   `list` on CRDs for `kubernetes_manifest` 3.2.1 schema discovery. No Secret or
   PVC access, no workload `update`/`list`/`watch`, no RBAC write, and no
   cluster-scoped write. Terraform manages no token Secret, kubeconfig, or
-  Jenkins credential; `k3s-homeops` handoff is operator-managed. Existing
-  wildcard dnsmasq configuration already covers `homeops.homelab.home.arpa`, so
-  no DNS resource was added. No HomeOps application workload exists here.
-  Runbook: `docs/homeops-platform-runbook.md`. **Repo-locally verified only**
-  (`terraform fmt -check -recursive`, `bash terraform/platform/validate.sh`,
-  `bash terraform/modules/namespace-resourcequota/plan-check.sh`, `git diff
-  --check`). **Not live-verified**: no HCP-backed plan/apply, RBAC matrix,
-  credential handoff, or HomeOps hostname lookup was run for this issue.
+  Jenkins credential; `k3s-homeops` handoff is operator-managed. There is no
+  wildcard DNS covering HomeOps on this workstation. Local name resolution is
+  operator-managed through `/etc/hosts`; the verified entry is `192.168.1.197
+  homeops.homelab.home.arpa`, and Terraform does not manage it. No HomeOps
+  application workload exists here. Runbook:
+  `docs/homeops-platform-runbook.md`. **Repo-locally and live-verified**: the
+  reviewed saved plan against the existing HCP Terraform `homelab-platform`
+  workspace reported `10 to add, 0 to change, 0 to destroy`; apply reported `10
+  added, 0 changed, 0 destroyed`; the post-apply plan reported no changes. Live
+  Kubernetes checks confirmed the Namespace, the four exact ResourceQuota
+  values, both ServiceAccounts, and all observer/deployer allow and deny RBAC
+  checks. The operator-managed hostname entry also resolved locally. Credential
+  handoff was not part of this verification.
 - generic local backup/restore mechanism — script-only (no CronJob or other
   scheduler), fully application-independent. `backup/backup.sh` requires
   `BACKUP_DESTINATION` (absolute, must already exist, must already be mode

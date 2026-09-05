@@ -8,12 +8,18 @@ Services, Traefik IngressRoute, CI, Jenkinsfile, and application Terraform.
 
 ## Verification status
 
-**Implemented and repository-locally verified only.** The Terraform passes
-`terraform fmt -check -recursive`, `bash terraform/platform/validate.sh`, and
-the Namespace Pattern throwaway plan check. No live Terraform plan or apply has
-been run for issue #38, and the live RBAC and DNS checks below have not been
-executed. Do not treat repository-local validation as evidence that these
-objects exist in the cluster.
+**Implemented and live-verified.** Issue #38 was applied against the existing
+HCP Terraform `homelab-platform` workspace from a reviewed saved plan: `10 to
+add, 0 to change, 0 to destroy`. Apply completed with `10 added, 0 changed, 0
+destroyed`, and the post-apply plan reported no changes.
+
+Live Kubernetes verification confirmed that the `homeops` Namespace,
+`homeops-quota`, `homeops-observer` ServiceAccount, and `homeops-deployer`
+ServiceAccount exist. The quota matches the four limits below, and every
+observer and deployer allow/deny check in the RBAC matrix passed. Local
+`homeops.homelab.home.arpa` name resolution was also verified through the
+operator-managed `/etc/hosts` entry documented below. Credential handoff was
+not part of this verification.
 
 ## Platform resources
 
@@ -118,14 +124,12 @@ the reusable module contract, not the real `module.homeops` instance.
 
 ## Gated live workflow
 
-The following is an operator procedure and was not run as part of issue #38.
-It mutates HCP state and the cluster, so it requires separate explicit approval.
+This operator procedure was completed for issue #38. It mutates HCP state and
+the cluster, so future applies still require separate explicit approval.
 
-**Prerequisite:** the currently pending HomeStreamLab deployment identity must
-first be independently planned, approved, applied, and converged through issue
-#31's runbook. The repository records that identity as not yet live-applied. If
-a HomeOps plan contains any HomeStreamLab create, update, delete, or replace,
-stop; do not combine the two issues into one apply.
+Keep issue-scoped changes isolated. If a future HomeOps plan contains any
+HomeStreamLab create, update, delete, or replace, stop; do not combine the two
+issues in one apply.
 
 1. Confirm the `homelab-platform` HCP workspace is in Local execution mode.
 2. Initialize with the operator's `TF_CLOUD_ORGANIZATION` and local
@@ -155,6 +159,10 @@ kubernetes_cluster_role_binding_v1.homeops_deployer_cluster_read
 8. Obtain separate apply approval, apply the exact reviewed plan artifact, run
    the checks below, then require a convergence plan with zero non-`no-op`
    actions.
+
+Recorded result: the saved plan reported `10 to add, 0 to change, 0 to
+destroy`; apply reported `10 added, 0 changed, 0 destroyed`; the post-apply
+plan reported no changes.
 
 ## RBAC verification matrix
 
@@ -278,20 +286,18 @@ the old credential without changing Terraform-managed RBAC.
 See [`homestreamlab-deployer-runbook.md`](./homestreamlab-deployer-runbook.md#credential-handoff-operator-managed)
 for the existing command-level operator procedure.
 
-## DNS
+## Name resolution
 
-No HomeOps DNS record is added. The existing dnsmasq rule
-`address=/<HOMELAB_DOMAIN>/<HOST_LAN_IP>` already covers every subdomain,
-including `homeops.homelab.home.arpa` when
-`HOMELAB_DOMAIN=homelab.home.arpa`. After the prerequisites are applied, verify
-the existing resolver directly:
+There is no wildcard DNS covering HomeOps on this workstation. Local name
+resolution is operator-managed through `/etc/hosts`; Terraform does not manage
+this entry. The verified local entry is:
 
-```sh
-dig @<HOST_LAN_IP> homeops.homelab.home.arpa +short
+```text
+192.168.1.197 homeops.homelab.home.arpa
 ```
 
-The answer must be exactly `<HOST_LAN_IP>`. This verifies DNS only; the HomeOps
-repository must deploy the IngressRoute before HTTP routing can work.
+This verifies name resolution only; the HomeOps repository must deploy the
+IngressRoute before HTTP routing can work.
 
 ## Rollback
 
