@@ -280,6 +280,32 @@ Implemented and verified:
   kubeconfig issued, and the positive/negative `kubectl auth can-i` RBAC matrix
   in the runbook has not been run. Update this entry with the gated
   plan/apply + RBAC verification evidence once it exists.
+- HomeOps platform prerequisites — issue #38 adds `module.homeops` in
+  `terraform/platform/main.tf`, reusing
+  `terraform/modules/namespace-resourcequota/` for the `homeops` Namespace and
+  `homeops-quota` ResourceQuota (`requests.cpu=500m`, `limits.cpu=1`,
+  `requests.memory=512Mi`, `limits.memory=1Gi`).
+  `terraform/platform/homeops-observer.tf` declares the runtime-only
+  `homeops-observer` ServiceAccount plus a purpose-built ClusterRole and binding:
+  `get,list` on `namespaces`, `pods`, and `deployments.apps`, and `get` on
+  `pods/log`; no write, `watch`, wildcard, Secret, node, event, storage, service,
+  IngressRoute, or RBAC access. `terraform/platform/homeops-deployer.tf`
+  separately declares `homeops-deployer` (`automount_service_account_token =
+  false`), a namespaced Role/RoleBinding granting only
+  `get,create,patch,delete` on `services`, `deployments.apps`, and
+  `ingressroutes.traefik.io`, plus `homeops-deployer-cluster-read` with the two
+  existing provider-pattern reads: `get` on only Namespace `homeops`, and
+  `list` on CRDs for `kubernetes_manifest` 3.2.1 schema discovery. No Secret or
+  PVC access, no workload `update`/`list`/`watch`, no RBAC write, and no
+  cluster-scoped write. Terraform manages no token Secret, kubeconfig, or
+  Jenkins credential; `k3s-homeops` handoff is operator-managed. Existing
+  wildcard dnsmasq configuration already covers `homeops.homelab.home.arpa`, so
+  no DNS resource was added. No HomeOps application workload exists here.
+  Runbook: `docs/homeops-platform-runbook.md`. **Repo-locally verified only**
+  (`terraform fmt -check -recursive`, `bash terraform/platform/validate.sh`,
+  `bash terraform/modules/namespace-resourcequota/plan-check.sh`, `git diff
+  --check`). **Not live-verified**: no HCP-backed plan/apply, RBAC matrix,
+  credential handoff, or HomeOps hostname lookup was run for this issue.
 - generic local backup/restore mechanism — script-only (no CronJob or other
   scheduler), fully application-independent. `backup/backup.sh` requires
   `BACKUP_DESTINATION` (absolute, must already exist, must already be mode

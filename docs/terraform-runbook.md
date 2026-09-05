@@ -102,8 +102,10 @@ for the full record.
 
 | File | Role |
 | --- | --- |
-| `main.tf` | instantiates the Namespace Pattern module once, as `module "homestreamlab"` — see [`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8) |
+| `main.tf` | instantiates the Namespace Pattern module for `homestreamlab` and `homeops` — see [`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8) and the [HomeOps platform runbook](./homeops-platform-runbook.md) |
 | `homestreamlab-deployer.tf` | the HomeStreamLab deployment identity — `ServiceAccount` + namespace-scoped `Role`/`RoleBinding` (`secrets`, `persistentvolumeclaims`, `services`, `deployments`, `ingressroutes`) + a `ClusterRole`/`ClusterRoleBinding` with two cluster-scoped reads (`get Namespace/homestreamlab`, `list customresourcedefinitions`) — see [HomeStreamLab deployment identity](#homestreamlab-deployment-identity-issue-31) and [`docs/homestreamlab-deployer-runbook.md`](./homestreamlab-deployer-runbook.md) |
+| `homeops-observer.tf` | the HomeOps runtime observer `ServiceAccount` and purpose-built read-only cluster RBAC — see the [HomeOps platform runbook](./homeops-platform-runbook.md) |
+| `homeops-deployer.tf` | the HomeOps Jenkins deployer `ServiceAccount`, namespaced workload RBAC, and two provider-required cluster reads — see the [HomeOps platform runbook](./homeops-platform-runbook.md) |
 | `versions.tf` | `required_version`, the `cloud` block, provider constraints |
 | `providers.tf` | `kubernetes` and `helm` provider configuration |
 | `variables.tf` | `kubeconfig_path` (required), `kube_context` (defaults to `default`) |
@@ -613,9 +615,11 @@ separately (`kubectl delete secret homestreamlab-deployer-token -n homestreamlab
 
 ## Verifying against HCP Terraform
 
-This sequence has been run against the live `homelab-platform` workspace with
-the results recorded in [Verification status](#verification-status). It
-remains the procedure for re-verifying after any change to this root module.
+This sequence has been run against historical live `homelab-platform` baseline
+states with the results recorded in [Verification status](#verification-status).
+For a pending root-module change, the plan expectation is issue-specific and
+must come from that issue's runbook. Do not interpret the historical baseline
+result below as the expected plan for un-applied configuration.
 
 Only after [HCP workspace setup](#hcp-workspace-setup) confirms Local mode:
 
@@ -633,14 +637,18 @@ Expected:
 - `init` — successful initialisation against HCP Terraform, providers installed,
   `.terraform.lock.hcl` unchanged;
 - `validate` — `Success! The configuration is valid.`;
-- `plan` — **`No changes. Your infrastructure matches the configuration.`**
+- `plan` - matches the applicable issue-specific machine-readable plan gate.
 
-The plan reports no changes because the configuration matches the
-workspace's current state — for the empty baseline (issue #6) that meant no
-resources on either side; after issue #8's apply it means the
-`homestreamlab` Namespace and ResourceQuota already exist and match
-`main.tf` exactly (see
-[`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8)).
+Historically, the empty baseline (issue #6) and the converged Namespace state
+after issue #8 reported **`No changes. Your infrastructure matches the
+configuration.`** Current source also contains the not-yet-live-applied
+HomeStreamLab deployment identity and HomeOps prerequisites, so a live plan is
+not expected to be empty until those changes are separately approved, applied,
+and converged. Follow
+[`docs/homestreamlab-deployer-runbook.md`](./homestreamlab-deployer-runbook.md)
+for issue #31 and
+[`docs/homeops-platform-runbook.md`](./homeops-platform-runbook.md) for issue
+#38; never combine their pending changes into one apply.
 `kubeconfig_path` still has to be set — it has no default — which is what
 proves the machine-specific value is wired through a variable rather than
 committed.

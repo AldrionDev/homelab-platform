@@ -14,3 +14,16 @@ module "homestreamlab" {
   memory_request = "2Gi"
   memory_limit   = "4Gi"
 }
+
+# Issue #38: platform allocation for HomeOps. Application workloads remain in
+# the separate HomeOps repository.
+module "homeops" {
+  source = "../modules/namespace-resourcequota"
+
+  project_name = "homeops"
+
+  cpu_request    = "500m"
+  cpu_limit      = "1"
+  memory_request = "512Mi"
+  memory_limit   = "1Gi"
+}
