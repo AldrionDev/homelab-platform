@@ -311,6 +311,49 @@ Implemented and verified:
   values, both ServiceAccounts, and all observer/deployer allow and deny RBAC
   checks. The operator-managed hostname entry also resolved locally. Credential
   handoff was not part of this verification.
+- `omnivise-iot` namespace instantiation — issue #41 adds a third caller of the
+  Namespace Pattern module in `terraform/platform/main.tf`:
+  `module "omnivise_iot"` (`source = "../modules/namespace-resourcequota"`,
+  `project_name = "omnivise-iot"` — underscore module label, hyphenated
+  `project_name`, so the Namespace is named exactly `omnivise-iot`), with these
+  explicitly approved platform quota policy values (the same profile as
+  `homestreamlab`):
+  ```hcl
+  cpu_request    = "1"
+  cpu_limit      = "2"
+  memory_request = "2Gi"
+  memory_limit   = "4Gi"
+  ```
+  No new provider — `.terraform.lock.hcl` unchanged; `module.homestreamlab` and
+  `module.homeops` untouched. Repo-locally verified: `bash
+  terraform/platform/validate.sh`, `terraform -chdir=terraform fmt -check
+  -recursive`, and `bash
+  terraform/modules/namespace-resourcequota/plan-check.sh` (the last
+  regression-tests the generic module only, not the concrete `omnivise-iot`
+  values). Live-verified against the real `homelab-platform` HCP workspace and
+  this host's k3s cluster: the reviewed saved `terraform plan` refreshed the
+  existing HomeStreamLab and HomeOps resources (including the issue #31
+  resources) from Terraform state, none of which appeared in the changing set,
+  and contained exactly 2 creates
+  (`module.omnivise_iot.kubernetes_namespace_v1.this`,
+  `module.omnivise_iot.kubernetes_resource_quota_v1.this`) with the expected
+  names and `spec.hard` and no other resource changes; the saved plan was
+  applied without recompute and `terraform apply` reported `2 added, 0 changed,
+  0 destroyed`; `kubectl get namespace omnivise-iot` shows `Active`, and
+  `kubectl get resourcequota omnivise-iot-quota -n omnivise-iot -o yaml` shows
+  `spec.hard` matching the four values above exactly; no application workloads,
+  Services, PVCs, or IngressRoutes exist in the namespace; a subsequent
+  `terraform plan -input=false` reported `No changes. Your infrastructure
+  matches the configuration.` The saved plan and its JSON rendering were kept
+  outside this repository. This issue creates **only**
+  the Namespace and ResourceQuota: no OmniVise Deployment, StatefulSet,
+  Service, Secret, ConfigMap, PVC, Job, IngressRoute, Helm release, or
+  Jenkinsfile, and no OmniVise deployment identity or RBAC (ServiceAccount,
+  Role/RoleBinding, ClusterRole/ClusterRoleBinding, Jenkins credential) —
+  those are deferred to a later dedicated platform issue. The future
+  `omnivise-iot-k8s` workspace must reference this namespace, never recreate
+  it. Runbooks: `docs/terraform-runbook.md` and the generic "Onboarding a new
+  project" procedure in `docs/runbook.md`.
 - generic local backup/restore mechanism — script-only (no CronJob or other
   scheduler), fully application-independent. `backup/backup.sh` requires
   `BACKUP_DESTINATION` (absolute, must already exist, must already be mode
