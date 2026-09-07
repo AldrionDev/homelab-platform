@@ -244,8 +244,8 @@ pointed at this host's k3s cluster.
 
 It instantiates the reusable Namespace Pattern module
 ([`terraform/modules/namespace-resourcequota/`](./terraform/modules/namespace-resourcequota/))
-in `terraform/platform/main.tf`, reserving the `homestreamlab` and `homeops`
-Namespaces with matching ResourceQuotas. It declares HomeStreamLab's
+in `terraform/platform/main.tf`, reserving the `homestreamlab`, `homeops` and
+`omnivise-iot` Namespaces with matching ResourceQuotas. It declares HomeStreamLab's
 deployment identity in `terraform/platform/homestreamlab-deployer.tf` — a
 `homestreamlab-deployer` ServiceAccount, a least-privilege namespace-scoped
 Role/RoleBinding (`secrets`, `persistentvolumeclaims`, `services`, `deployments`,
@@ -383,8 +383,10 @@ for the exact evidence and boundaries.
   (`lan-ufw-lib.sh`, `lan-ufw-install.sh`, `lan-ufw-rollback.sh`, `lan-ufw.test.sh`)
 - `registry/` — local Docker registry: `docker-compose.yml` and `smoke-test.sh`
 - `terraform/platform/` — the Platform's HCP-backed Terraform root module;
-  instantiates the Namespace Pattern module for `homestreamlab` and `homeops`
-  (`main.tf`) and declares their platform-owned identities and RBAC
+  instantiates the Namespace Pattern module for `homestreamlab`, `homeops` and
+  `omnivise-iot` (`main.tf`) and declares the HomeStreamLab and HomeOps
+  platform-owned identities and RBAC (`omnivise-iot` is a namespace/quota
+  reservation only — its deployment identity is deferred to a later issue)
 - `terraform/modules/namespace-resourcequota/` — the reusable Namespace
   Pattern child module (`Namespace` + matching `ResourceQuota`), with its own
   repo-local throwaway-plan verification (`plan-check.sh`)

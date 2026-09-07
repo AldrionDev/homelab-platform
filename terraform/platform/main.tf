@@ -27,3 +27,20 @@ module "homeops" {
   memory_request = "512Mi"
   memory_limit   = "1Gi"
 }
+
+# Issue #41: platform allocation for OmniVise IoT. Application workloads,
+# Services, storage, config and the IngressRoute instance remain in the
+# separate omnivise-iot repository / its future omnivise-iot-k8s workspace,
+# which must reference this namespace, never recreate it.
+module "omnivise_iot" {
+  source = "../modules/namespace-resourcequota"
+
+  project_name = "omnivise-iot"
+
+  # Explicitly approved platform quota policy values for this project
+  # (same profile as homestreamlab).
+  cpu_request    = "1"
+  cpu_limit      = "2"
+  memory_request = "2Gi"
+  memory_limit   = "4Gi"
+}

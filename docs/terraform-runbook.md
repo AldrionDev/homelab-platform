@@ -102,7 +102,7 @@ for the full record.
 
 | File | Role |
 | --- | --- |
-| `main.tf` | instantiates the Namespace Pattern module for `homestreamlab` and `homeops` — see [`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8) and the [HomeOps platform runbook](./homeops-platform-runbook.md) |
+| `main.tf` | instantiates the Namespace Pattern module for `homestreamlab`, `homeops` and `omnivise-iot` (module label `omnivise_iot`, `project_name = "omnivise-iot"`) — see [`homestreamlab` namespace instantiation](#homestreamlab-namespace-instantiation-issue-8), the [HomeOps platform runbook](./homeops-platform-runbook.md), and the generic [Onboarding a new project](./runbook.md#onboarding-a-new-project) procedure |
 | `homestreamlab-deployer.tf` | the HomeStreamLab deployment identity — `ServiceAccount` + namespace-scoped `Role`/`RoleBinding` (`secrets`, `persistentvolumeclaims`, `services`, `deployments`, `ingressroutes`) + a `ClusterRole`/`ClusterRoleBinding` with two cluster-scoped reads (`get Namespace/homestreamlab`, `list customresourcedefinitions`) — see [HomeStreamLab deployment identity](#homestreamlab-deployment-identity-issue-31) and [`docs/homestreamlab-deployer-runbook.md`](./homestreamlab-deployer-runbook.md) |
 | `homeops-observer.tf` | the HomeOps runtime observer `ServiceAccount` and purpose-built read-only cluster RBAC — see the [HomeOps platform runbook](./homeops-platform-runbook.md) |
 | `homeops-deployer.tf` | the HomeOps Jenkins deployer `ServiceAccount`, namespaced workload RBAC, and two provider-required cluster reads — see the [HomeOps platform runbook](./homeops-platform-runbook.md) |
