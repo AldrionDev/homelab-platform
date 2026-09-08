@@ -613,6 +613,96 @@ and nothing else. The Namespace/ResourceQuota are unaffected. The operator-creat
 separately (`kubectl delete secret homestreamlab-deployer-token -n homestreamlab
 --ignore-not-found`).
 
+## OmniVise deployment identity (issue #42)
+
+`terraform/platform/omnivise-iot-deployer.tf` adds a platform-owned Kubernetes
+**deployment identity** for OmniVise IoT — the third instance of the pattern
+established by HomeStreamLab (#31) and HomeOps (#38). The full operator procedure
+— provider-source audit, permission rationale, the approved cluster-scoped
+reads, the RBAC verification matrix, and the credential/kubeconfig handoff —
+lives in
+[`docs/omnivise-iot-deployer-runbook.md`](./omnivise-iot-deployer-runbook.md).
+This section covers only how it fits the platform Terraform workspace.
+
+**What it manages** (five Terraform resources, all in the `homelab-platform`
+workspace):
+
+- `kubernetes_service_account_v1.omnivise_iot_deployer` — `omnivise-iot-deployer`
+  in the existing `omnivise-iot` namespace, `automount_service_account_token =
+  false`;
+- `kubernetes_role_v1` / `kubernetes_role_binding_v1` `omnivise-iot-deployer` —
+  namespace-scoped, `get,create,patch,delete` (no `update`, `list` or `watch`)
+  on `services` (core), `deployments` (`apps`), `statefulsets` (`apps`), `jobs`
+  (`batch`) and `ingressroutes` (`traefik.io`) — the exact CRUD lifecycle the
+  `hashicorp/kubernetes` `3.2.1` provider (the version OmniVise also pins)
+  performs for OmniVise's `kubernetes_service_v1`, `kubernetes_deployment_v1`,
+  `kubernetes_stateful_set_v1`, `kubernetes_job_v1` and `kubernetes_manifest`
+  (Traefik IngressRoute) resources after `omnivise-iot#39`;
+- `kubernetes_cluster_role_v1` / `kubernetes_cluster_role_binding_v1`
+  `omnivise-iot-deployer-cluster-read` — two cluster-scoped **reads**: `get` on
+  `namespaces` restricted by `resourceNames` to `omnivise-iot` (OmniVise reads
+  `Namespace/omnivise-iot` via a data source), and `list` on
+  `customresourcedefinitions` (`apiextensions.k8s.io`) because
+  `kubernetes_manifest` v3.2.1 unconditionally lists all CRDs during schema
+  resolution. No cluster-scoped write; no CRD write.
+
+The `omnivise-iot` Namespace/ResourceQuota (`module.omnivise_iot`, issue #41)
+are **not** touched — the namespace name is consumed only via that module's
+`namespace_name` output. No new provider is introduced, so `.terraform.lock.hcl`
+does not change. Terraform manages **no** token, `Secret`, or kubeconfig; that
+material is operator-issued after apply and must never enter state, variables,
+outputs, or Git. This issue configures no Jenkins credential — `k3s-omnivise-iot`
+is only a future consumer credential-name contract for a later OmniVise
+deployment issue.
+
+### Apply workflow
+
+Same gated flow as
+[the namespace instantiation above](#workflow-followed). **Prerequisite:**
+confirm `homelab-platform#41` is already applied and the live `omnivise-iot`
+Namespace + `omnivise-iot-quota` ResourceQuota exist independently of this
+change (`kubectl get namespace omnivise-iot`,
+`kubectl get resourcequota -n omnivise-iot`) — this keeps the #42 plan from
+folding in Namespace/quota creation that belongs to #41. Then repo-local
+`validate.sh` → confirm Execution Mode Local → `init` (lock unchanged) →
+`plan -out` to a scratch dir outside the repo → `terraform show -json` + `jq`
+gate → separate explicit apply approval → `apply` the exact saved plan → RBAC
+verification matrix → convergence plan.
+
+**Plan gate** — filter `["no-op"]` before counting:
+
+- `CHANGING = [ .resource_changes[] | select(.change.actions != ["no-op"]) ]`;
+- `CHANGING | length == 5`, every entry `.change.actions == ["create"]`,
+  addresses exactly the SA, Role, RoleBinding, ClusterRole and
+  ClusterRoleBinding above;
+- **no** other `resource_changes` entry has a create/update/delete/replace
+  action — no `module.homestreamlab.*`, `module.homeops.*`,
+  `module.omnivise_iot.*`, `homestreamlab-deployer`, `homeops-deployer` or
+  `homeops-observer` entry changes. An unchanged resource that Terraform omits
+  from `resource_changes` entirely is fine; a resource present with a non-`no-op`
+  action is a hard STOP;
+- the SA shows `automount_service_account_token == false`; the Role has exactly
+  five rules — `services` (core), `deployments` / `statefulsets` (`apps`),
+  `jobs` (`batch`), `ingressroutes` (`traefik.io`) — each
+  `[get,create,patch,delete]` and nothing else; the ClusterRole has exactly two
+  rules — `namespaces` + `resource_names ["omnivise-iot"]` + `verbs ["get"]`,
+  and `customresourcedefinitions` (`apiextensions.k8s.io`) + `verbs ["list"]`;
+  no wildcard `*` anywhere.
+
+**Convergence** — a follow-up `terraform plan`'s JSON has **zero**
+`resource_changes` with `.change.actions != ["no-op"]`; the human `No changes.`
+line is supporting evidence only.
+
+### Rollback
+
+Revert `terraform/platform/omnivise-iot-deployer.tf`, run a full (untargeted)
+`terraform plan`, and fail closed unless the JSON shows **exactly** the five
+deletes and **zero** other non-`no-op` changes, under a separate explicit apply
+approval. The `omnivise-iot` Namespace/ResourceQuota are unaffected. The
+operator-created `omnivise-iot-deployer-token` Secret is not Terraform-managed —
+delete it separately (`kubectl delete secret omnivise-iot-deployer-token -n
+omnivise-iot --ignore-not-found`).
+
 ## Verifying against HCP Terraform
 
 This sequence has been run against historical live `homelab-platform` baseline
@@ -647,7 +737,9 @@ reported `10 added, 0 changed, 0 destroyed`, and the post-apply plan reported no
 changes. Current source still contains the not-yet-live-applied HomeStreamLab
 deployment identity, so follow
 [`docs/homestreamlab-deployer-runbook.md`](./homestreamlab-deployer-runbook.md)
-for issue #31. See
+for issue #31, and the OmniVise deployment identity (issue #42) — follow
+[`docs/omnivise-iot-deployer-runbook.md`](./omnivise-iot-deployer-runbook.md) for
+its gated plan/apply and RBAC matrix. See
 [`docs/homeops-platform-runbook.md`](./homeops-platform-runbook.md) for issue
 #38's completed apply and live verification evidence.
 `kubeconfig_path` still has to be set — it has no default — which is what
