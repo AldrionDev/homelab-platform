@@ -75,6 +75,17 @@ and `local-jenkins-platform` was not modified. Temporary credential-generation
 material was securely removed (`shred -u` + `rm -rf`). No token, kubeconfig,
 Secret material, host-specific value, Terraform plan or state is committed.
 
+### Post-#105 RBAC amendment
+
+OmniVise issue #105 introduced the Terraform-managed
+`kubernetes_config_map_v1.mongodb_application_bootstrap` resource. The first
+normal Jenkins delivery correctly failed closed because the existing
+least-privilege deployer Role did not permit ConfigMap creation.
+
+The Role was therefore widened narrowly for core `configmaps` with exactly
+`get`, `create`, `patch`, and `delete`. No `update`, `list`, or `watch` was
+added, and no other resource or scope was widened.
+
 ## Pre-implementation audit (issue #42)
 
 ### OmniVise Terraform-managed Kubernetes resource set
@@ -128,19 +139,20 @@ the Namespace or ResourceQuota.
 
 ## Why these permissions, and only these
 
-Derived from the resource set above, provider `hashicorp/kubernetes` `3.2.1`,
+Derived from the current OmniVise Terraform-managed resource set, provider `hashicorp/kubernetes` `3.2.1`,
 cross-checked against the provider source at tag `v3.2.1`
 (`kubernetes/resource_kubernetes_service_v1.go`,
-`…_deployment_v1.go`, `…_stateful_set_v1.go`, `…_job_v1.go`,
-`manifest/provider/resource.go`).
+`…_config_map_v1.go`, `…_deployment_v1.go`, `…_stateful_set_v1.go`,
+`…_job_v1.go`, `manifest/provider/resource.go`).
 
 | OmniVise Terraform | API group / resource | Scope | Provider lifecycle (v3.2.1) | Granted verbs |
 | --- | --- | --- | --- | --- |
 | `data.kubernetes_namespace_v1.application` | core / `namespaces` | cluster | `Namespaces().Get(name)` only | `get` (name-restricted, ClusterRole) |
 | `kubernetes_service_v1.{mongodb,backend,frontend}` | core / `services` | `omnivise-iot` | `Create()` / `Get()` / `Patch(JSONPatchType)` / `Delete()` + `Get()` delete-poll; all ClusterIP → the LoadBalancer wait never runs, `endpoints` / `endpointslices` never touched | `get, create, patch, delete` |
+| `kubernetes_config_map_v1.mongodb_application_bootstrap` | core / `configmaps` | `omnivise-iot` | `Create()` / `Get()` / `Patch(JSONPatchType)` / `Delete()` + `Get()` delete-poll | `get, create, patch, delete` |
 | `kubernetes_deployment_v1.{backend,frontend,sensor_simulator}` | `apps` / `deployments` | `omnivise-iot` | `Create()` / `Get()` / `Patch(JSONPatchType)` / `Delete()` + `Get()` delete-poll; `wait_for_rollout = false` → no rollout poll; pods / replicasets / `deployments/status` never touched | `get, create, patch, delete` |
 | `kubernetes_stateful_set_v1.mongodb` | `apps` / `statefulsets` | `omnivise-iot` | `Create()` / `Get()` / `Patch(JSONPatchType)` / `Delete()` + `Get()` delete-poll; `wait_for_rollout = false` → no rollout poll; pods / PVCs / controllerrevisions never touched | `get, create, patch, delete` |
-| `kubernetes_job_v1.mongodb_bootstrap` | `batch` / `jobs` | `omnivise-iot` | `Create()` / `Get()` / `Patch(JSONPatchType)` / `Delete()` + `Get()` delete-poll; `wait_for_completion = true` polls the **Job object** via `BatchV1().Jobs(ns).Get()` for status conditions — no `list`, no `watch`, the bootstrap Pod is never touched | `get, create, patch, delete` |
+| `kubernetes_job_v1.{mongodb_bootstrap,mongodb_application_bootstrap}` | `batch` / `jobs` | `omnivise-iot` | `Create()` / `Get()` / `Patch(JSONPatchType)` / `Delete()` + `Get()` delete-poll; `wait_for_completion = true` polls the **Job object** via `BatchV1().Jobs(ns).Get()` for status conditions — no `list`, no `watch`, the bootstrap Pods are never touched | `get, create, patch, delete` |
 | `kubernetes_manifest.frontend_ingressroute` | `traefik.io` / `ingressroutes` | `omnivise-iot` | Server-Side Apply: `Patch(ApplyPatchType)` for create+update, `Get()` for read, `Delete()` for destroy. SSA that creates an absent object is authorized as `create` + `patch` | `get, create, patch, delete` |
 | `kubernetes_manifest.frontend_ingressroute` (schema resolution) | `apiextensions.k8s.io` / `customresourcedefinitions` | cluster | `fetchCRDs` → `RESTMappings` + `Resource(crd).List()` on every plan/read/apply, no fallback if denied | `list` (ClusterRole; cannot be name-restricted) |
 
@@ -154,7 +166,7 @@ Deliberately **not** granted:
   `wait_for_completion` polls the Job object with `Get()` only; every Service is
   ClusterIP (no LoadBalancer wait); `kubernetes_manifest` has no `wait` block.
 - any verb on `pods`, `pods/log`, `replicasets`, `endpoints`,
-  `endpointslices`, `persistentvolumeclaims`, `configmaps`, `secrets`,
+  `endpointslices`, `persistentvolumeclaims`, `secrets`,
   `serviceaccounts`, `roles`, `rolebindings`, `resourcequotas`, `events`,
   `leases`, `daemonsets`, `cronjobs`, `ingresses` (`networking.k8s.io`),
   `networkpolicies`, `horizontalpodautoscalers`, `poddisruptionbudgets`,
@@ -250,8 +262,9 @@ Only then:
      resource that Terraform omits from `resource_changes` entirely is fine; a
      resource present with a non-`no-op` action is a hard STOP.
    - the SA's `automount_service_account_token` is `false`;
-   - the Role has exactly five rules — `services` (core), `deployments` (`apps`),
-     `statefulsets` (`apps`), `jobs` (`batch`), `ingressroutes` (`traefik.io`) —
+   - the Role has exactly six rules — `services` (core), `configmaps` (core),
+     `deployments` (`apps`), `statefulsets` (`apps`), `jobs` (`batch`),
+     `ingressroutes` (`traefik.io`) —
      each `["get","create","patch","delete"]` and nothing else (no `update`,
      `list`, `watch`);
    - the ClusterRole has exactly two rules — `namespaces` +
@@ -284,6 +297,11 @@ kubectl auth can-i get    services                 -n omnivise-iot $AS
 kubectl auth can-i create services                 -n omnivise-iot $AS
 kubectl auth can-i patch  services                 -n omnivise-iot $AS
 kubectl auth can-i delete services                 -n omnivise-iot $AS
+
+kubectl auth can-i get    configmaps               -n omnivise-iot $AS
+kubectl auth can-i create configmaps               -n omnivise-iot $AS
+kubectl auth can-i patch  configmaps               -n omnivise-iot $AS
+kubectl auth can-i delete configmaps               -n omnivise-iot $AS
 kubectl auth can-i get    deployments.apps         -n omnivise-iot $AS
 kubectl auth can-i create deployments.apps         -n omnivise-iot $AS
 kubectl auth can-i patch  deployments.apps         -n omnivise-iot $AS
@@ -326,7 +344,9 @@ kubectl auth can-i get    pods                     -n omnivise-iot $AS
 kubectl auth can-i list   pods                     -n omnivise-iot $AS
 kubectl auth can-i get    persistentvolumeclaims   -n omnivise-iot $AS
 kubectl auth can-i get    secrets                  -n omnivise-iot $AS
-kubectl auth can-i get    configmaps               -n omnivise-iot $AS
+kubectl auth can-i list   configmaps               -n omnivise-iot $AS
+kubectl auth can-i watch  configmaps               -n omnivise-iot $AS
+kubectl auth can-i update configmaps               -n omnivise-iot $AS
 kubectl auth can-i get    resourcequotas           -n omnivise-iot $AS
 kubectl auth can-i create serviceaccounts          -n omnivise-iot $AS
 kubectl auth can-i create roles.rbac.authorization.k8s.io -n omnivise-iot $AS

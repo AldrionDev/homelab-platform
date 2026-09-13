@@ -76,6 +76,12 @@ resource "kubernetes_role_v1" "omnivise_iot_deployer" {
   }
 
   rule {
+    api_groups = [""]
+    resources  = ["configmaps"]
+    verbs      = ["get", "create", "patch", "delete"]
+  }
+
+  rule {
     api_groups = ["apps"]
     resources  = ["deployments"]
     verbs      = ["get", "create", "patch", "delete"]
